@@ -1,0 +1,11 @@
+{
+  "id": "./",
+  "name": "Praxis Check-in",
+  "short_name": "Check-in",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f7f4",
+  "theme_color": "#f5f7f4",
+  "lang": "de"
+}

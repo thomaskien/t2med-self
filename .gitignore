@@ -1,0 +1,14 @@
+# Lokale Dateien und Laufzeitdaten nicht veröffentlichen.
+.DS_Store
+._*
+__pycache__/
+.env
+.env.*
+*.jar
+/.t2med-egk-privat/
+/diagnostics/
+/testpatient-auswahl.json
+/config.toml
+/secret.key
+/sql_ed25519
+/WORKER_TASK.md

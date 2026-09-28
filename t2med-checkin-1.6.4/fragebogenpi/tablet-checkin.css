@@ -1,0 +1,162 @@
+    :root { --maxw: 780px; }
+    /* mehr Abstand oben (safe-area) fuer WebApp */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      background:#f2f2f7;
+      margin:0;
+      padding: calc(20px + env(safe-area-inset-top, 0px)) 20px 20px 20px;
+    }
+    .card { background:#fff; border-radius:14px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,0.06); margin:0 auto; max-width:var(--maxw); }
+    .patient { font-size: 2.0rem; font-weight: 900; margin: 0 0 6px 0; }
+    .sub { color:#444; margin:0 0 12px 0; line-height:1.35; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; }
+    .field { flex:1 1 220px; text-align:left; margin: 8px 0; }
+    label { display:block; font-size:0.95rem; font-weight:700; margin-bottom:6px; color:#222; }
+    input, textarea { width:100%; box-sizing:border-box; padding:10px 12px; border-radius:10px; border:1px solid #ddd; font-size:1rem; }
+    textarea { min-height: 88px; resize: vertical; }
+
+    .section { margin-top: 16px; padding-top: 8px; border-top: 1px solid #eee; }
+    .section h2 { font-size: 1.2rem; margin: 10px 0 6px 0; }
+    .formHeading { font-size:1.45rem; line-height:1.25; margin:18px 0 10px; text-align:center; }
+
+    .checkgrid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:10px; }
+    .check { display:flex; align-items:center; gap:10px; background:#fafafa; border:1px solid #eee; border-radius:12px; padding:10px 12px; }
+    .check input { width:22px; height:22px; flex:0 0 auto; }
+    .check span { font-size:1.05rem; overflow-wrap:anywhere; }
+
+    .checkHeader{
+      grid-column: 1 / -1;
+      padding: 8px 10px 0 6px;
+      margin-top: 4px;
+      font-weight: 900;
+      font-size: 1.05rem;
+      color:#222;
+    }
+
+    .radioRow{
+      display:grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap:10px;
+    }
+    .radioPill{
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+      background:#fafafa;
+      border:1px solid #eee;
+      border-radius:12px;
+      padding:12px 12px;
+      min-height:44px;
+      box-sizing:border-box;
+    }
+    .radioPill input{ width:22px; height:22px; flex:0 0 auto; }
+    .radioPill span{ white-space:normal; overflow-wrap:anywhere; text-align:center; }
+
+    .scaleQuestion{
+      flex:1 1 100%;
+      background:#fafafa;
+      border:1px solid #e5e5ea;
+      border-radius:14px;
+      padding:14px 16px 12px 16px;
+      box-sizing:border-box;
+      margin:10px 0;
+    }
+    .scaleQuestion.invalid{ border-color:#ff3b30; background:#fff3f2; }
+    .field.invalid{
+      background:#fff3f2;
+      border-radius:12px;
+      box-shadow:0 0 0 2px #ff3b30;
+      padding:10px;
+      box-sizing:border-box;
+    }
+    .field.invalid > label{ color:#d70015; }
+    .field.invalid .radioRow{ outline:2px solid #ff3b30; outline-offset:3px; border-radius:12px; }
+    .field.invalid input:not([type="radio"]):not([type="range"]):not([type="hidden"]),
+    .field.invalid textarea,
+    .field.invalid select{ border-color:#ff3b30; outline:1px solid #ff3b30; }
+    .check.invalid{ border-color:#ff3b30; outline:1px solid #ff3b30; background:#fff3f2; color:#d70015; }
+    .scaleValue{
+      display:table;
+      min-width:42px;
+      margin:4px auto 8px auto;
+      padding:5px 12px;
+      border-radius:999px;
+      background:#e5e5ea;
+      color:#555;
+      text-align:center;
+      font-size:1.05rem;
+      font-weight:900;
+    }
+    .scaleQuestion.answered .scaleValue{ background:#007aff; color:#fff; }
+    .scaleEndpoints{
+      display:grid;
+      grid-template-columns:minmax(0, 1fr) minmax(0, 1fr);
+      gap:18px;
+      align-items:end;
+      font-size:0.92rem;
+      line-height:1.25;
+      color:#333;
+    }
+    .scaleEndpoints span:last-child{ text-align:right; }
+    .scaleRange{
+      width:100%;
+      margin:14px 0 2px 0;
+      padding:0;
+      border:0;
+      accent-color:#007aff;
+      opacity:0.45;
+    }
+    .scaleQuestion.answered .scaleRange{ opacity:1; }
+    .scaleTicks{
+      display:flex;
+      justify-content:space-between;
+      padding:0;
+      color:#666;
+      font-size:0.82rem;
+      font-variant-numeric:tabular-nums;
+    }
+    button.scaleTick{
+      width:auto;
+      min-width:30px;
+      min-height:30px;
+      margin:0;
+      padding:3px 8px;
+      border-radius:8px;
+      background:transparent;
+      color:#666;
+      font-size:0.82rem;
+      line-height:1;
+    }
+    button.scaleTick.selected{ background:#007aff; color:#fff; }
+    button.scaleTick:focus-visible{ outline:2px solid #007aff; outline-offset:2px; }
+    .requiredHint{ color:#777; font-size:0.8rem; font-weight:600; }
+
+    button { font-size: 1.05rem; padding: 14px 18px; border-radius: 12px; border: none; width: 100%; margin: 10px 0; cursor: pointer; }
+    #submitBtn { background: #34c759; color:#fff; }
+    #abortBtn { background: #ff3b30; color:#fff; }
+    #submitBtn:disabled { background: #a7e3b7; cursor: not-allowed; }
+
+    #status { font-size: 1.05rem; font-weight: 700; color: #333; margin-top: 10px; min-height: 1.4em; word-break: break-word; }
+    .footer { margin-top: 14px; font-size: 0.8rem; color: #777; text-align:center; }
+    .warn { background:#fff7e6; border:1px solid #ffe0a6; padding:12px; border-radius:12px; margin:10px 0; color:#6b4b00; }
+
+    .hidden { display:none !important; }
+
+/* Check-in iPad landscape skin; questionnaire definitions and score logic remain upstream. */
+:root{--maxw:1020px;color:#183c37;font-size:24px}
+body{background:#f5f7f4;padding:24px max(28px,env(safe-area-inset-left))}
+.card{padding:28px;border-radius:24px;box-shadow:none}
+h1{font-size:1.6rem;line-height:1.2}p{line-height:1.4}
+label{font-size:1rem;line-height:1.4}.field{margin:14px 0}
+input,textarea{min-height:64px;border:2px solid #d8e2da;border-radius:14px;font-size:1rem}
+.check,.radioPill{min-height:72px;padding:14px;border:2px solid #d8e2da}
+.check input,.radioPill input{width:28px;height:28px;min-height:28px;accent-color:#19695b}
+.section{margin-top:28px;padding-top:18px}.section h2{font-size:1.2rem}
+button{min-height:76px;font-size:1.1rem;touch-action:manipulation}
+#submitBtn{background:#19695b}#abortBtn{background:#e3eee7;color:#183c37}
+button.scaleTick{min-width:44px;min-height:48px}
+.scaleRange{min-height:48px;accent-color:#19695b}
+.completion-notice{padding:20px;border-radius:20px;background:#e3eee7;text-align:center}
+.completion-notice p{margin-bottom:0}.footer{font-size:.7rem}.requiredHint{font-size:.75rem}
+:focus-visible{outline:4px solid #c38935;outline-offset:3px}

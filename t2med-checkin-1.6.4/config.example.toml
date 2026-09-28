@@ -1,0 +1,159 @@
+# T2med Check-in 1.6.4. Der Installer erzeugt /etc/t2med-checkin/config.toml.
+# Keine Passwörter in diese Datei schreiben. Texte dürfen UTF-8 enthalten.
+# Unterstützt: [Abschnitte], [Abschnitte.Unterabschnitte], einzeilige Strings,
+# boolesche Werte und Ganzzahlen. Andere TOML-Konstrukte werden abgewiesen.
+# Praxisstandard: Server, Leser und Kontext-IDs bei anderer Installation anpassen.
+
+[app]
+title = "Willkommen in unserer Praxis"
+timezone = "Europe/Berlin"
+# Absolute Gültigkeit ab Mitarbeiteranmeldung, nicht ab letzter Aktivität.
+# Höchstens 12 Stunden; kleinere Werte sind möglich.
+session_hours = 12
+patient_timeout_seconds = 180
+completion_seconds = 15
+state_dir = "/var/lib/t2med-checkin"
+secret_file = "/etc/t2med-checkin/secret.key"
+
+[t2med]
+server = "10.0.83.120"
+rest_port = 16567
+# Eigener CDN-Dienst. Standard laut T2med 26.8.0, unabhängig vom REST-Port.
+cdn_port = 16570
+verify_tls = false
+ca_file = ""
+timeout_seconds = 30
+# Einmalig bei der Einrichtung validierter Aufrufkontext, keine Fallaufnahme.
+doctor_role_id = "0033bde0d4e764224e23b445db2ea5497932"
+treatment_location_id = "0034d805d01e83eb4109a7056286e1b8b0c6"
+
+[reader]
+name = "kienzlebox"
+connect_before_read = false
+test_before_read = true
+read_attempts = 3
+
+[routing]
+calendar_prefix = "Kalender "
+waiting_prefix = "Wartezimmer "
+# Ergänzende Mitarbeiterliste wie in 1.3. Patienten gehen normal ins Wartezimmer.
+add_appointment_without_case_queue = true
+note_max_length = 250
+
+[categories.waiting]
+message = "Sie können nun direkt ins Wartezimmer gehen. Sie werden aufgerufen."
+
+[categories.new_patient]
+room = "Neupatient"
+message = "Sie sind anscheinend ein neuer Patient: Wir benötigen von Ihnen noch eine Unterschrift. Bitte melden Sie sich anschließend für die  nächsten Schritte am Empfang."
+
+[categories.appointment_without_case]
+room = "Termin ohne Schein"
+message = "Sie können nun direkt ins Wartezimmer gehen. Sie werden aufgerufen."
+
+[categories.with_case_fallback]
+room = "fuer Empfang"
+question = "Gibt es ein akutes Problem, wegen dem Sie hier sind?"
+message = "Bitte besprechen Sie alles Weitere am Empfang."
+
+[categories.without_case]
+room = "Ohne Schein"
+question = "Gibt es ein akutes Problem, wegen dem Sie hier sind?"
+message = "Bitte besprechen Sie alles Weitere am Empfang."
+
+[categories.acute]
+room = "Akutfall"
+label = "Ja, ich habe ein akutes Problem"
+question = "In aller Kürze: Warum sind Sie hier?"
+message = "Bitte besprechen Sie alles Weitere am Empfang."
+
+[categories.card_only]
+room = "Ohne Schein"
+label = "Ich wollte nur kurz meine Karte einlesen lassen :-)"
+message = "Vielen Dank! Wir sind darauf angewiesen, dass die Karte jedes Quartal eingelesen wird, da wir sonst kein Geld von der Krankenkasse bekommen."
+
+[categories.other]
+room = "fuer Empfang"
+label = "Anderes Anliegen"
+question = "In aller Kürze: Um was geht es?"
+message = "Bitte besprechen Sie alles Weitere am Empfang."
+
+[selfie]
+enabled = true
+# Nähe zur physischen Linse, ohne Kamera-Zoom. links/rechts; Pfeil auch oben/aus.
+preview_side = "right"
+frame_height_percent = 100
+lens_arrow = "right"
+capture_text = "Bitte Auslöser drücken"
+# Abfrage bei jedem Besuch ohne echtes Patientenbild; Nein wird nicht gespeichert.
+question = "Wir würden gerne für unsere Akte ein Foto von Ihnen aufnehmen. Sind Sie damit einverstanden?"
+frame_text = "Bitte Gesicht in den Rahmen"
+adjust_text = "Verschieben Sie das Bild mit einem Finger. Mit zwei Fingern können Sie es vergrößern oder verkleinern."
+output_size = 800
+jpeg_quality_percent = 88
+
+[contacts]
+enabled = true
+question = "Stimmen Ihre Kontaktdaten noch?"
+new_question = "Wie können wir Sie erreichen?"
+hint = "Alle Angaben sind freiwillig. Zum Ändern bitte den vollständigen neuen Wert eingeben. Leere Felder lassen vorhandene Angaben unverändert."
+address_question = "Stimmt Ihre Adresse auf der Karte noch?"
+note_code = "N"
+
+[questionnaires]
+enabled = true
+# Kommagetrennte Formular-IDs, keine Dateipfade. Leer bedeutet keine Startformulare.
+new_patient_forms = ""
+existing_patient_forms = ""
+# Diese Liste begrenzt auch die in YAML angeforderten Folgeformulare.
+allowed_forms = "ana,anam,act,cat,phq2,phq9,alka,fage,goeb,bart"
+forms_dir = "/etc/t2med-checkin/formulare"
+timeout_seconds = 900
+entry_code = "ana"
+# Muss in T2med dem Fachinformationstyp Allergie entsprechen; wird geprüft.
+allergy_code = "all"
+
+[privacy]
+# Unabhängig von questionnaires.enabled, bei allen Patienten vor medizinischen Bögen.
+enabled = true
+# Bedeutet immer mindestens diese Version. Nur die Versionsnummer, kein Operator.
+# Numerischer Vergleich; 1.10 ist neuer als 1.5.
+# Zuerst eine mindestens gleich neue datenschutz.yaml bereitstellen.
+minimum_version = "1.3.4"
+# Exakte PNG-Dateinamen aus dem T2med-Pin-Katalog; leer deaktiviert die jeweilige Zuordnung.
+# Die beiden Dateien müssen auf dem T2med-Server installiert sein (siehe pins/README.md).
+sms_pin_allowed = "SMS-erlaubt.png"
+sms_pin_denied = "SMS-nicht-erlaubt.png"
+timeout_seconds = 900
+declined_message = "Bitte melden Sie sich wegen des Datenschutzformulars am Empfang."
+
+[messages]
+insert_card = "Bitte stecken Sie Ihre Gesundheitskarte in das Lesegerät."
+read_button = "Karte einlesen"
+next_card_button = "Nächste Karte"
+reading = "Ihre Karte wird eingelesen. Einen Moment bitte."
+remove_card = "Bitte nehmen Sie Ihre Karte wieder mit."
+reception_error = "Die Anmeldung konnte nicht vollständig abgeschlossen werden. Bitte melden Sie sich am Empfang."
+camera_error = "Die Kamera ist gerade nicht verfügbar. Sie können ohne Foto fortfahren."
+photo_error = "Ihre Anmeldung ist abgeschlossen. Das Foto konnte nicht bestätigt werden. Bitte bei Bedarf am Empfang nachfragen."
+done_title = "Vielen Dank!"
+
+[card_presentation_date]
+enabled = true
+target_date = "1990-01-01"
+
+[sql]
+# local: PDO über lokalen Socket; tcp: PDO über TLS; ssh: begrenztes SQL-Gateway.
+mode = "local"
+host = "10.0.83.120"
+port = 16569
+database = "t2med"
+username = "t2med"
+socket_directory = "/tmp"
+password_file = ""
+sslmode = "verify-full"
+sslrootcert = ""
+ssh_user = "root"
+ssh_port = 22
+ssh_key = "/etc/t2med-checkin/sql_ed25519"
+ssh_known_hosts = "/etc/t2med-checkin/known_hosts"

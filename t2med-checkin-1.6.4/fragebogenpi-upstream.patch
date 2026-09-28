@@ -1,0 +1,2989 @@
+--- a/tablet.php
++++ b/tablet.php
+@@ -2,10 +2,13 @@
+ declare(strict_types=1);
+ 
+ /*
+- * tablet.php v1.8.2
++ * tablet.php v1.8.3
+  * fragebogenpi.de von Dr. Thomas Kienzle 2026
+  *
+  * Changelog (vollstaendig)
++ * - v1.8.3:
++ *   + Gemeinsame unveraenderte YAML-Helfer in tablet-engine.php fuer den
++ *     separaten Check-in-Einstieg tablet-checkin.php. GDT-Ablauf bleibt erhalten.
+  * - v1.8.2:
+  *   + YAML kann ueber meta.handler einen spezialisierten PHP-Formularhandler
+  *     deklarieren; die Tablet-Warteschlange uebergibt Auftrag und Ruecksprungziel.
+@@ -123,7 +126,7 @@
+  */
+ 
+ $APP_FOOTER  = 'fragebogenpi.de von Dr. Thomas Kienzle 2026';
+-$APP_VERSION = 'v1.8.2 (tablet.php)';
++$APP_VERSION = 'v1.8.3 (tablet.php)';
+ 
+ $dirGdt = '/srv/fragebogenpi/GDT';
+ 
+@@ -176,1082 +179,10 @@
+ // Wenn du x.concept einsetzt -> hier auf true setzen.
+ // ------------------------------------------------------------
+ $ENABLE_XCONCEPT_3000_END_WORKAROUND = false;
+-
+-// ----------------- helpers -----------------
+-function h(string $s): string { return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
+-
+-function is_valid_utf8(string $s): bool {
+-    return $s === '' ? true : (bool)@preg_match('//u', $s);
+-}
+-
+-function req_to_utf8_for_ui(string $raw): string {
+-    if ($raw === '') return '';
+-    if (is_valid_utf8($raw)) return $raw;
+-
+-    if (function_exists('iconv')) {
+-        foreach (['CP437', 'ISO-8859-1', 'Windows-1252'] as $enc) {
+-            $tmp = @iconv($enc, 'UTF-8//IGNORE', $raw);
+-            if ($tmp !== false && $tmp !== '') return $tmp;
+-        }
+-    }
+-    return $raw;
+-}
+-
+-function translit_for_ui(string $raw): string {
+-    $s = req_to_utf8_for_ui($raw);
+-    $map = [
+-        'Ä'=>'Ae','Ö'=>'Oe','Ü'=>'Ue','ä'=>'ae','ö'=>'oe','ü'=>'ue','ß'=>'ss',
+-        '’'=>"'","´"=>"'","`"=>"'","“"=>'"',"”"=>'"',"„"=>'"',"–"=>'-',"—"=>'-',"…"=>'...',
+-    ];
+-    $s = strtr($s, $map);
+-
+-    if (function_exists('iconv')) {
+-        $tmp = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $s);
+-        if ($tmp !== false && $tmp !== '') $s = $tmp;
+-    }
+-
+-    $s = preg_replace('/[^\x20-\x7E]/', '?', $s) ?? $s;
+-    return $s;
+-}
+-
+-function ascii_only(string $s): string {
+-    $map = [
+-        'Ä'=>'Ae','Ö'=>'Oe','Ü'=>'Ue','ä'=>'ae','ö'=>'oe','ü'=>'ue','ß'=>'ss',
+-        '’'=>"'","´"=>"'","`"=>"'","“"=>'"',"”"=>'"',"„"=>'"',"–"=>'-',"—"=>'-',"…"=>'...',
+-    ];
+-    $s = strtr($s, $map);
+-
+-    if (function_exists('iconv')) {
+-        $tmp = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $s);
+-        if ($tmp !== false && $tmp !== '') $s = $tmp;
+-    }
+-
+-    $s = preg_replace('/[^\x20-\x7E]/', '?', $s) ?? $s;
+-    return $s;
+-}
+-
+-function clean_utf8_text(string $s, int $maxLen = 200): string {
+-    $s = str_replace(["\r", "\n", "\t"], ' ', $s);
+-    $s = preg_replace('/\s+/', ' ', $s) ?? $s;
+-    $s = trim($s);
+-
+-    if (function_exists('mb_substr')) {
+-        $s = mb_substr($s, 0, $maxLen, 'UTF-8');
+-    } else {
+-        $s = substr($s, 0, $maxLen);
+-    }
+-
+-    if (function_exists('iconv')) {
+-        $fixed = @iconv('UTF-8', 'UTF-8//IGNORE', $s);
+-        if ($fixed !== false) $s = $fixed;
+-    }
+-
+-    return $s;
+-}
+-
+-function req_value_passthrough(string $s, int $maxLen = 200): string {
+-    $s = str_replace(["\r", "\n", "\t"], ' ', $s);
+-    $s = preg_replace('/\s+/', ' ', $s) ?? $s;
+-    $s = trim($s);
+-    if (strlen($s) > $maxLen) $s = substr($s, 0, $maxLen);
+-    return $s;
+-}
+-
+-function json_out(int $code, array $payload): void {
+-    http_response_code($code);
+-    header('Content-Type: application/json; charset=utf-8');
+-    header('Cache-Control: no-store');
+-
+-    $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+-    if ($json === false) {
+-        $json = json_encode([
+-            'status' => 'error',
+-            'message' => 'json_encode fehlgeschlagen',
+-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{"status":"error","message":"json_encode failed"}';
+-    }
+-
+-    echo $json;
+-    exit;
+-}
+-
+-function gdt_line(string $field4, string $value): string {
+-    $rest = $field4 . $value;
+-    $len  = 3 + strlen($rest) + 2; // +CRLF
+-    return str_pad((string)$len, 3, '0', STR_PAD_LEFT) . $rest;
+-}
+-
+-function parse_gdt(string $path): array {
+-    $raw = file_get_contents($path);
+-    if ($raw === false) return [];
+-    $raw = str_replace("\r\n", "\n", $raw);
+-    $lines = array_filter(explode("\n", $raw), fn($l) => trim($l) !== '');
+-
+-    $fields = [];
+-    foreach ($lines as $line) {
+-        if (strlen($line) < 7) continue;
+-        $rest  = substr($line, 3);
+-        $field = substr($rest, 0, 4);
+-        $value = substr($rest, 4);
+-        $fields[$field] = $value; // raw bytes beibehalten
+-    }
+-    return $fields;
+-}
+-
+-function write_gdt_file(string $path, array $lines): void {
+-    $joined = implode("\r\n", $lines) . "\r\n";
+-    $totalBytes = strlen($joined);
+-    $total6 = str_pad((string)$totalBytes, 6, '0', STR_PAD_LEFT);
+-
+-    foreach ($lines as $i => $line) {
+-        $rest = substr($line, 3);
+-        $field = substr($rest, 0, 4);
+-        if ($field === '8100') {
+-            $lines[$i] = gdt_line('8100', $total6);
+-            break;
+-        }
+-    }
+ 
+-    $joined2 = implode("\r\n", $lines) . "\r\n";
+-    $totalBytes2 = strlen($joined2);
+-    if ($totalBytes2 !== $totalBytes) {
+-        $total6b = str_pad((string)$totalBytes2, 6, '0', STR_PAD_LEFT);
+-        foreach ($lines as $i => $line) {
+-            $rest = substr($line, 3);
+-            $field = substr($rest, 0, 4);
+-            if ($field === '8100') {
+-                $lines[$i] = gdt_line('8100', $total6b);
+-                break;
+-            }
+-        }
+-        $joined2 = implode("\r\n", $lines) . "\r\n";
+-    }
+-
+-    file_put_contents($path, $joined2);
+-}
+-
+-function to_ascii_wrapped_lines(string $s, int $maxBytes, string $firstPrefix = '', string $nextPrefix = ''): array {
+-    $s = clean_utf8_text($s, 5000);
+-    $s = ascii_only($s);
+-
+-    $candidate = $firstPrefix . $s;
+-    if (strlen($candidate) <= $maxBytes) return [$candidate];
+-
+-    $words = preg_split('/\s+/', $s) ?: [];
+-    $out = [];
+-    $cur = '';
+-    $isFirst = true;
+-
+-    foreach ($words as $w) {
+-        $try = ($cur === '') ? $w : ($cur . ' ' . $w);
+-        $prefix = $isFirst ? $firstPrefix : $nextPrefix;
+-        if (strlen($prefix . $try) <= $maxBytes) {
+-            $cur = $try;
+-            continue;
+-        }
+-
+-        if ($cur !== '') {
+-            $prefix2 = $isFirst ? $firstPrefix : $nextPrefix;
+-            $out[] = $prefix2 . $cur;
+-            $isFirst = false;
+-            $cur = $w;
+-            continue;
+-        }
+-
+-        $out[] = substr($prefix . $w, 0, $maxBytes);
+-        $isFirst = false;
+-        $cur = '';
+-    }
+-
+-    if ($cur !== '') {
+-        $prefix3 = $isFirst ? $firstPrefix : $nextPrefix;
+-        $out[] = $prefix3 . $cur;
+-    }
+-
+-    foreach ($out as &$line) $line = ascii_only($line);
+-    return $out;
+-}
+-
+-/** YAML lesen und alle Strings rekursiv ASCII-only machen */
+-function yaml_load_or_die_ascii(string $path): array {
+-    if (!is_file($path)) return ['__error' => 'YAML-Datei nicht gefunden: ' . $path];
+-    if (!function_exists('yaml_parse_file')) return ['__error' => 'PHP YAML Extension fehlt (yaml_parse_file nicht verfuegbar). Bitte php-yaml installieren.'];
+-    $data = @yaml_parse_file($path);
+-    if (!is_array($data)) return ['__error' => 'YAML konnte nicht geparst werden oder ist leer/ungueltig.'];
+-    return yaml_ascii_walk($data);
+-}
+-
+-function yaml_ascii_walk($v) {
+-    if (is_string($v)) return ascii_only($v);
+-    if (is_array($v)) {
+-        $out = [];
+-        foreach ($v as $k => $vv) {
+-            $kk = is_string($k) ? ascii_only($k) : $k;
+-            $out[$kk] = yaml_ascii_walk($vv);
+-        }
+-        return $out;
+-    }
+-    return $v;
+-}
+-
+-function cond_ok(array $answers, ?array $cond): bool {
+-    if (!$cond) return true;
+-    $id = (string)($cond['id'] ?? '');
+-    if ($id === '') return true;
+-    $val = $answers[$id] ?? null;
+-
+-    $eq  = $cond['equals'] ?? null;
+-    $neq = $cond['not_equals'] ?? null;
+-
+-    if (is_bool($val)) {
+-        if ($eq === 'yes') $eq = true;
+-        if ($eq === 'no')  $eq = false;
+-        if ($neq === 'yes') $neq = true;
+-        if ($neq === 'no')  $neq = false;
+-    } elseif (is_string($val)) {
+-        if ($val === 'yes' && $eq === true) $eq = 'yes';
+-        if ($val === 'no'  && $eq === false) $eq = 'no';
+-        if ($val === 'yes' && $neq === true) $neq = 'yes';
+-        if ($val === 'no'  && $neq === false) $neq = 'no';
+-    }
+-
+-    if (array_key_exists('equals', $cond)) return $val === $eq;
+-    if (array_key_exists('not_equals', $cond)) return $val !== $neq;
+-
+-    if (array_key_exists('greater_than_or_equal', $cond)) {
+-        $minimum = $cond['greater_than_or_equal'];
+-        if (!is_numeric($val) || !is_numeric($minimum)) return false;
+-        return (float)$val >= (float)$minimum;
+-    }
+-
+-    if (array_key_exists('in', $cond)) {
+-        $lst = $cond['in'];
+-        if (!is_array($lst)) $lst = [];
+-        $norm = ascii_only(clean_utf8_text((string)$val, 200));
+-        foreach ($lst as $x) {
+-            $x = ascii_only(clean_utf8_text((string)$x, 200));
+-            if ($x !== '' && $norm === $x) return true;
+-        }
+-        return false;
+-    }
+-
+-    if (array_key_exists('any_selected_except', $cond)) {
+-        $except = ascii_only(clean_utf8_text((string)$cond['any_selected_except'], 200));
+-        if (!is_array($val)) return false;
+-        foreach ($val as $opt) {
+-            $opt = ascii_only(clean_utf8_text((string)$opt, 200));
+-            if ($opt === '') continue;
+-            if ($except === '') return true;
+-            if ($opt !== $except) return true;
+-        }
+-        return false;
+-    }
+-
+-    return true;
+-}
+-
+-function build_section_block_lines(string $title, array $bullets, int $maxBytes): array {
+-    $out = [];
+-    foreach (to_ascii_wrapped_lines('---', $maxBytes) as $l) $out[] = gdt_line('6228', $l);
+-    foreach (to_ascii_wrapped_lines($title, $maxBytes) as $l) $out[] = gdt_line('6228', $l);
+-    foreach (to_ascii_wrapped_lines('========', $maxBytes) as $l) $out[] = gdt_line('6228', $l);
+-    foreach ($bullets as $b) {
+-        foreach (to_ascii_wrapped_lines($b, $maxBytes, '- ', '  ') as $l) $out[] = gdt_line('6228', $l);
+-    }
+-    return $out;
+-}
+-
+-function yaml_questions_by_id(array $yaml): array {
+-    $out = [];
+-    $sections = $yaml['sections'] ?? [];
+-    if (!is_array($sections)) return $out;
+-
+-    foreach ($sections as $section) {
+-        if (!is_array($section)) continue;
+-        $questions = $section['questions'] ?? [];
+-        if (!is_array($questions)) continue;
+-        foreach ($questions as $question) {
+-            if (!is_array($question)) continue;
+-            $id = (string)($question['id'] ?? '');
+-            if ($id !== '') $out[$id] = $question;
+-        }
+-    }
+-    return $out;
+-}
+-
+-function numeric_value(string $value): int|float|null {
+-    if ($value === '' || !is_numeric($value)) return null;
+-    $number = (float)$value;
+-    return floor($number) === $number ? (int)$number : $number;
+-}
+-
+-function scale_answer_valid(array $question, mixed $answer): bool {
+-    if (!is_string($answer) || $answer === '') return false;
+-    $value = numeric_value($answer);
+-    if ($value === null) return false;
+-
+-    $scale = $question['scale'] ?? [];
+-    if (!is_array($scale)) return false;
+-    $minimum = isset($scale['minimum']) && is_numeric($scale['minimum']) ? (float)$scale['minimum'] : 0.0;
+-    $maximum = isset($scale['maximum']) && is_numeric($scale['maximum']) ? (float)$scale['maximum'] : 10.0;
+-    $step = isset($scale['step']) && is_numeric($scale['step']) ? (float)$scale['step'] : 1.0;
+-    if ($step <= 0 || (float)$value < $minimum || (float)$value > $maximum) return false;
+-
+-    $steps = ((float)$value - $minimum) / $step;
+-    return abs($steps - round($steps)) < 0.000001;
+-}
+-
+-function question_score(array $question, mixed $answer): int|float|null {
+-    if (!is_string($answer) || $answer === '') return null;
+-    if ((string)($question['type'] ?? '') === 'scale') {
+-        return scale_answer_valid($question, $answer) ? numeric_value($answer) : null;
+-    }
+-
+-    $scores = $question['scores'] ?? [];
+-    if (!is_array($scores) || !array_key_exists($answer, $scores)) return null;
+-    return is_numeric($scores[$answer]) ? numeric_value((string)$scores[$answer]) : null;
+-}
+-
+-function derive_yaml_answers(array $yaml, array &$answers): void {
+-    $questionsById = yaml_questions_by_id($yaml);
+-
+-    foreach ($questionsById as $id => $question) {
+-        if ((string)($question['type'] ?? '') !== 'derived') continue;
+-        $calculation = $question['calculation'] ?? null;
+-        if (!is_array($calculation) || (string)($calculation['operation'] ?? '') !== 'sum_scores') continue;
+-
+-        $fields = $calculation['fields'] ?? [];
+-        if (!is_array($fields) || count($fields) === 0) continue;
+-
+-        $sum = 0;
+-        $complete = true;
+-        foreach ($fields as $field) {
+-            $field = (string)$field;
+-            $score = isset($questionsById[$field])
+-                ? question_score($questionsById[$field], $answers[$field] ?? null)
+-                : null;
+-            if ($score === null) {
+-                $complete = false;
+-                break;
+-            }
+-            $sum += $score;
+-        }
+-        if ($complete) $answers[$id] = $sum;
+-    }
+-
+-    foreach ($questionsById as $id => $question) {
+-        if ((string)($question['type'] ?? '') !== 'derived') continue;
+-        $source = (string)($question['source'] ?? '');
+-        $ranges = $question['ranges'] ?? [];
+-        if ($source === '' || !isset($answers[$source]) || !is_array($ranges)) continue;
+-
+-        $value = (float)$answers[$source];
+-        foreach ($ranges as $range) {
+-            if (!is_array($range)) continue;
+-            $minimum = isset($range['minimum']) && is_numeric($range['minimum']) ? (float)$range['minimum'] : -INF;
+-            $maximum = isset($range['maximum']) && is_numeric($range['maximum']) ? (float)$range['maximum'] : INF;
+-            if ($value < $minimum || $value > $maximum) continue;
+-            $status = ascii_only(clean_utf8_text((string)($range['status'] ?? ''), 300));
+-            if ($status !== '') $answers[$id] = $status;
+-            break;
+-        }
+-    }
+-}
+-
+-function validate_yaml_answers(array $yaml, array $answers): array {
+-    $errors = [];
+-    $sections = $yaml['sections'] ?? [];
+-    if (!is_array($sections)) return $errors;
+-
+-    foreach ($sections as $section) {
+-        if (!is_array($section)) continue;
+-        if (isset($section['show_if']) && is_array($section['show_if']) && !cond_ok($answers, $section['show_if'])) continue;
+-        $sectionType = (string)($section['type'] ?? '');
+-        $questions = $section['questions'] ?? [];
+-        if (!is_array($questions)) continue;
+-
+-        foreach ($questions as $question) {
+-            if (!is_array($question)) continue;
+-            $id = (string)($question['id'] ?? '');
+-            $type = (string)($question['type'] ?? '');
+-            $label = ascii_only(clean_utf8_text((string)($question['label'] ?? $id), 300));
+-            if ($id === '' || $type === 'derived' || $type === 'header') continue;
+-            if (isset($question['show_if']) && is_array($question['show_if']) && !cond_ok($answers, $question['show_if'])) continue;
+-
+-            $value = $answers[$id] ?? null;
+-            $empty = $sectionType === 'checklist'
+-                ? $value !== true
+-                : (is_array($value) ? count($value) === 0 : trim((string)$value) === '');
+-
+-            if (!empty($question['required']) && $empty) {
+-                $errors[] = 'Pflichtfrage unbeantwortet: ' . $label;
+-                continue;
+-            }
+-            if ($empty) continue;
+-
+-            if ($type === 'scale' && !scale_answer_valid($question, $value)) {
+-                $errors[] = 'Ungueltiger Skalenwert: ' . $label;
+-                continue;
+-            }
+-            if ($type === 'choice') {
+-                $options = $question['options'] ?? [];
+-                if (is_array($options) && !in_array((string)$value, array_map('strval', $options), true)) {
+-                    $errors[] = 'Ungueltige Auswahl: ' . $label;
+-                }
+-                continue;
+-            }
+-            if ($type === 'yesno' && !in_array((string)$value, ['yes', 'no'], true)) {
+-                $errors[] = 'Ungueltige Auswahl: ' . $label;
+-            }
+-        }
+-    }
+-
+-    return $errors;
+-}
+-
+-function configured_score_maximum(array $element, array $questionsById, string $source): int|float|null {
+-    if (isset($element['maximum']) && is_numeric($element['maximum'])) {
+-        return numeric_value((string)$element['maximum']);
+-    }
+-    if ($source === '' || !isset($questionsById[$source]) || !is_array($questionsById[$source])) return null;
+-
+-    $question = $questionsById[$source];
+-    $calculation = $question['calculation'] ?? [];
+-    if (is_array($calculation) && isset($calculation['maximum']) && is_numeric($calculation['maximum'])) {
+-        return numeric_value((string)$calculation['maximum']);
+-    }
+-
+-    $scale = $question['scale'] ?? [];
+-    if (is_array($scale) && isset($scale['maximum']) && is_numeric($scale['maximum'])) {
+-        return numeric_value((string)$scale['maximum']);
+-    }
+-    return null;
+-}
+-
+-function build_gdt_summary_lines(array $yaml, array $answers, int $maxBytes): array {
+-    $summary = $yaml['gdt_summary'] ?? null;
+-    if (!is_array($summary)) return [];
+-
+-    $title = ascii_only(clean_utf8_text((string)($summary['title'] ?? ''), 200));
+-    if ($title === '') return [];
+-
+-    $content = [];
+-    $questionsById = yaml_questions_by_id($yaml);
+-    $score = $summary['score'] ?? null;
+-    if (is_array($score)) {
+-        $source = (string)($score['source'] ?? '');
+-        if ($source !== '' && isset($answers[$source]) && is_numeric($answers[$source])) {
+-            $label = ascii_only(clean_utf8_text((string)($score['label'] ?? 'Punktwert'), 100));
+-            $suffix = ascii_only(clean_utf8_text((string)($score['suffix'] ?? 'Punkte'), 100));
+-            $value = numeric_value((string)$answers[$source]);
+-            if ($value !== null) {
+-                $scoreText = numeric_text($value);
+-                $maximum = configured_score_maximum($score, $questionsById, $source);
+-                if ($maximum !== null) $scoreText .= '/' . numeric_text($maximum);
+-                $content[] = trim($label . ': ' . $scoreText . ' ' . $suffix);
+-            }
+-        }
+-    }
+-
+-    $assessment = $summary['assessment'] ?? null;
+-    if (is_array($assessment)) {
+-        $source = (string)($assessment['source'] ?? '');
+-        $value = ascii_only(clean_utf8_text((string)($answers[$source] ?? ''), 300));
+-        if ($value !== '') $content[] = $value;
+-    }
+-
+-    $problemLines = [];
+-    $problems = $summary['problems'] ?? null;
+-    if (is_array($problems)) {
+-        $questionsById = yaml_questions_by_id($yaml);
+-        $fields = $problems['fields'] ?? [];
+-        if (is_array($fields)) {
+-            foreach ($fields as $field) {
+-                if (!is_array($field)) continue;
+-                $id = (string)($field['id'] ?? '');
+-                if ($id === '' || !isset($questionsById[$id])) continue;
+-                $scoreValue = question_score($questionsById[$id], $answers[$id] ?? null);
+-                $maximumScore = isset($field['maximum_score']) && is_numeric($field['maximum_score'])
+-                    ? (int)$field['maximum_score']
+-                    : PHP_INT_MAX;
+-                $minimumScore = isset($field['minimum_score']) && is_numeric($field['minimum_score'])
+-                    ? (int)$field['minimum_score']
+-                    : PHP_INT_MIN;
+-                if ($scoreValue === null || $scoreValue < $minimumScore || $scoreValue > $maximumScore) continue;
+-                $text = ascii_only(clean_utf8_text((string)($field['text'] ?? ''), 300));
+-                if ($text !== '') $problemLines[] = $text;
+-            }
+-        }
+-    }
+-
+-    if (count($content) === 0 && count($problemLines) === 0) return [];
+-
+-    $out = [];
+-    foreach (to_ascii_wrapped_lines('---', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
+-    foreach (to_ascii_wrapped_lines($title, $maxBytes) as $line) $out[] = gdt_line('6228', $line);
+-    foreach (to_ascii_wrapped_lines('========', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
+-    foreach ($content as $item) {
+-        foreach (to_ascii_wrapped_lines($item, $maxBytes) as $line) $out[] = gdt_line('6228', $line);
+-    }
+-    if (count($problemLines) > 0) {
+-        $out[] = gdt_line('6228', '');
+-        $problemTitle = ascii_only(clean_utf8_text((string)($problems['title'] ?? 'Problemfelder'), 200));
+-        foreach (to_ascii_wrapped_lines($problemTitle . ':', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
+-        foreach ($problemLines as $item) {
+-            foreach (to_ascii_wrapped_lines($item, $maxBytes, '- ', '  ') as $line) $out[] = gdt_line('6228', $line);
+-        }
+-    }
+-    return $out;
+-}
+-
+-function numeric_text(int|float $value): string {
+-    if (is_int($value) || floor($value) === $value) return (string)(int)$value;
+-    return rtrim(rtrim(number_format($value, 6, '.', ''), '0'), '.');
+-}
+-
+-function build_configured_gdt_lines(array $yaml, array $answers, int $maxBytes): array {
+-    $gdt = $yaml['gdt'] ?? null;
+-    if (!is_array($gdt)) return [];
+-    $sections = $gdt['sections'] ?? [];
+-    if (!is_array($sections)) return [];
+-
+-    $questionsById = yaml_questions_by_id($yaml);
+-    $out = [];
+-
+-    foreach ($sections as $section) {
+-        if (!is_array($section)) continue;
+-        if (isset($section['show_if']) && is_array($section['show_if']) && !cond_ok($answers, $section['show_if'])) continue;
+-
+-        $title = ascii_only(clean_utf8_text((string)($section['title'] ?? ''), 200));
+-        $elements = $section['elements'] ?? [];
+-        if ($title === '' || !is_array($elements)) continue;
+-
+-        $sectionLines = [];
+-        foreach ($elements as $element) {
+-            if (!is_array($element)) continue;
+-            $type = (string)($element['type'] ?? '');
+-
+-            if ($type === 'score') {
+-                $source = (string)($element['source'] ?? '');
+-                $value = $answers[$source] ?? null;
+-                if (!is_int($value) && !is_float($value)) continue;
+-                $label = ascii_only(clean_utf8_text((string)($element['label'] ?? 'Punktwert'), 100));
+-                $suffix = ascii_only(clean_utf8_text((string)($element['suffix'] ?? ''), 100));
+-                $singularSuffix = ascii_only(clean_utf8_text((string)($element['singular_suffix'] ?? ''), 100));
+-                $maximum = configured_score_maximum($element, $questionsById, $source);
+-                if ($maximum === null && (float)$value === 1.0 && $singularSuffix !== '') $suffix = $singularSuffix;
+-                $scoreText = numeric_text($value);
+-                if ($maximum !== null) $scoreText .= '/' . numeric_text($maximum);
+-                $line = $label . ': ' . $scoreText;
+-                if ($suffix !== '') $line .= ' ' . $suffix;
+-                $sectionLines[] = ['kind' => 'line', 'text' => $line];
+-                continue;
+-            }
+-
+-            if ($type === 'interpretation' || $type === 'value') {
+-                $source = (string)($element['source'] ?? '');
+-                $value = ascii_only(clean_utf8_text((string)($answers[$source] ?? ''), 600));
+-                if ($value === '') continue;
+-                $label = ascii_only(clean_utf8_text((string)($element['label'] ?? ''), 100));
+-                $suffix = ascii_only(clean_utf8_text((string)($element['suffix'] ?? ''), 100));
+-                if ($label !== '') $value = $label . ': ' . $value;
+-                if ($suffix !== '') $value .= ' ' . $suffix;
+-                $sectionLines[] = ['kind' => 'line', 'text' => $value];
+-                continue;
+-            }
+-
+-            if ($type === 'text') {
+-                $value = ascii_only(clean_utf8_text((string)($element['text'] ?? ''), 600));
+-                if ($value !== '') $sectionLines[] = ['kind' => 'line', 'text' => $value];
+-                continue;
+-            }
+-
+-            if ($type === 'answer_list') {
+-                $fields = $element['fields'] ?? [];
+-                if (!is_array($fields)) continue;
+-                $items = [];
+-
+-                foreach ($fields as $field) {
+-                    $fieldConfig = is_array($field) ? $field : ['id' => $field];
+-                    $id = (string)($fieldConfig['id'] ?? '');
+-                    if ($id === '' || !isset($questionsById[$id])) continue;
+-                    $question = $questionsById[$id];
+-                    if (isset($question['show_if']) && is_array($question['show_if']) && !cond_ok($answers, $question['show_if'])) continue;
+-                    $rawValue = $answers[$id] ?? null;
+-
+-                    if (is_array($rawValue)) {
+-                        $value = implode(', ', array_map('strval', $rawValue));
+-                    } elseif ($rawValue === true) {
+-                        $value = 'Ja';
+-                    } elseif ($rawValue === false) {
+-                        $value = 'Nein';
+-                    } else {
+-                        $value = (string)$rawValue;
+-                    }
+-                    $value = ascii_only(clean_utf8_text($value, 1000));
+-                    if ($value === '' && empty($fieldConfig['include_empty'])) continue;
+-                    if ($value === '') $value = 'Keine Angabe';
+-
+-                    $label = (string)($fieldConfig['label'] ?? ($question['label'] ?? $id));
+-                    $label = ascii_only(clean_utf8_text($label, 500));
+-                    if ($label !== '') $items[] = $label . ': ' . $value;
+-                }
+-
+-                if (count($items) > 0) {
+-                    $listTitle = ascii_only(clean_utf8_text((string)($element['title'] ?? ''), 200));
+-                    $sectionLines[] = ['kind' => 'answer_list', 'title' => $listTitle, 'items' => $items];
+-                }
+-                continue;
+-            }
+-
+-            if ($type !== 'problem_list') continue;
+-            $fields = $element['fields'] ?? [];
+-            if (!is_array($fields)) continue;
+-            $minimumScore = isset($element['minimum_score']) && is_numeric($element['minimum_score'])
+-                ? (float)$element['minimum_score']
+-                : -INF;
+-            $maximumScore = isset($element['maximum_score']) && is_numeric($element['maximum_score'])
+-                ? (float)$element['maximum_score']
+-                : INF;
+-            $items = [];
+-
+-            foreach ($fields as $field) {
+-                $fieldConfig = is_array($field) ? $field : ['id' => $field];
+-                $id = (string)($fieldConfig['id'] ?? '');
+-                if ($id === '' || !isset($questionsById[$id])) continue;
+-                $question = $questionsById[$id];
+-                $score = question_score($question, $answers[$id] ?? null);
+-                $fieldMinimum = isset($fieldConfig['minimum_score']) && is_numeric($fieldConfig['minimum_score'])
+-                    ? (float)$fieldConfig['minimum_score']
+-                    : $minimumScore;
+-                $fieldMaximum = isset($fieldConfig['maximum_score']) && is_numeric($fieldConfig['maximum_score'])
+-                    ? (float)$fieldConfig['maximum_score']
+-                    : $maximumScore;
+-                if ($score === null || (float)$score < $fieldMinimum || (float)$score > $fieldMaximum) continue;
+-
+-                $text = (string)($fieldConfig['text'] ?? ($question['problem_label'] ?? ($question['label'] ?? '')));
+-                $text = ascii_only(clean_utf8_text($text, 300));
+-                if ($text !== '') $items[] = $text;
+-            }
+-
+-            if (count($items) > 0) {
+-                $listTitle = ascii_only(clean_utf8_text((string)($element['title'] ?? 'Problemfelder'), 200));
+-                $sectionLines[] = ['kind' => 'problem_list', 'title' => $listTitle, 'items' => $items];
+-            }
+-        }
+-
+-        if (count($sectionLines) === 0) continue;
+-        $separatorLines = isset($section['separator_lines']) && is_numeric($section['separator_lines'])
+-            ? max(1, min(5, (int)$section['separator_lines']))
+-            : 1;
+-        for ($separator = 0; $separator < $separatorLines; $separator++) {
+-            foreach (to_ascii_wrapped_lines('---', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
+-        }
+-        foreach (to_ascii_wrapped_lines($title, $maxBytes) as $line) $out[] = gdt_line('6228', $line);
+-        foreach (to_ascii_wrapped_lines('========', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
+-
+-        foreach ($sectionLines as $lineConfig) {
+-            if ($lineConfig['kind'] === 'line') {
+-                foreach (to_ascii_wrapped_lines((string)$lineConfig['text'], $maxBytes) as $line) $out[] = gdt_line('6228', $line);
+-                continue;
+-            }
+-
+-            if ((string)$lineConfig['title'] !== '') {
+-                $out[] = gdt_line('6228', '');
+-                foreach (to_ascii_wrapped_lines((string)$lineConfig['title'] . ':', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
+-            }
+-            foreach ($lineConfig['items'] as $item) {
+-                foreach (to_ascii_wrapped_lines((string)$item, $maxBytes, '- ', '  ') as $line) $out[] = gdt_line('6228', $line);
+-            }
+-        }
+-    }
+-
+-    return $out;
+-}
+-
+-function section_bullets(array $section, array $answers): array {
+-    $bullets = [];
+-
+-    if (isset($section['show_if']) && is_array($section['show_if'])) {
+-        if (!cond_ok($answers, $section['show_if'])) return [];
+-    }
+-
+-    $type = (string)($section['type'] ?? '');
+-    $questions = $section['questions'] ?? [];
+-    if (!is_array($questions)) return [];
+-
+-    if ($type === 'checklist') {
+-        foreach ($questions as $q) {
+-            if (!is_array($q)) continue;
+-            $qType = (string)($q['type'] ?? '');
+-            if ($qType === 'header') continue;
+-
+-            $id = (string)($q['id'] ?? '');
+-            $label = (string)($q['label'] ?? '');
+-            if ($id === '' || $label === '') continue;
+-            if (($answers[$id] ?? false) === true) $bullets[] = $label;
+-        }
+-        return $bullets;
+-    }
+-
+-    foreach ($questions as $q) {
+-        if (!is_array($q)) continue;
+-        $id = (string)($q['id'] ?? '');
+-        $label = (string)($q['label'] ?? '');
+-        $qType = (string)($q['type'] ?? '');
+-        if ($id === '' || $label === '') continue;
+-
+-        if (isset($q['show_if']) && is_array($q['show_if'])) {
+-            if (!cond_ok($answers, $q['show_if'])) continue;
+-        }
+-
+-        $val = $answers[$id] ?? null;
+-
+-        if ($qType === 'yesno') {
+-            if ($val === 'yes' || $val === true) $bullets[] = $label;
+-            continue;
+-        }
+-
+-        if ($qType === 'multiselect') {
+-            if (is_array($val) && count($val) > 0) {
+-                $direct = in_array($id, ['allergie_typen'], true);
+-                foreach ($val as $opt) {
+-                    $opt = ascii_only(clean_utf8_text((string)$opt, 200));
+-                    if ($opt === '') continue;
+-                    $bullets[] = $direct ? $opt : ($label . ': ' . $opt);
+-                }
+-            }
+-            continue;
+-        }
+-
+-        if ($qType === 'choice') {
+-            $v = ascii_only(clean_utf8_text((string)$val, 200));
+-            if ($v === '' || $v === 'nein' || $v === 'normal' || $v === 'konstant') continue;
+-            $bullets[] = $label . ': ' . $v;
+-            continue;
+-        }
+-
+-        if ($qType === 'number' || $qType === 'text') {
+-            $v = ascii_only(clean_utf8_text((string)$val, 600));
+-            if ($v === '') continue;
+-            $bullets[] = $label . ': ' . $v;
+-            continue;
+-        }
+-
+-        if ($qType === 'derived') {
+-            if ($id === 'packyears') {
+-                $v = ascii_only(clean_utf8_text((string)($answers['_packyears_text'] ?? ''), 200));
+-                if ($v !== '') $bullets[] = $v;
+-            }
+-            continue;
+-        }
+-
+-        if ($val === true) $bullets[] = $label;
+-    }
+-
+-    return $bullets;
+-}
+-
+-function build_6228_blocks(array $yaml, array $answers, int $maxBytes): array {
+-    $out = [];
+-    $sections = $yaml['sections'] ?? [];
+-    if (!is_array($sections)) return [];
+-
+-    foreach ($sections as $sec) {
+-        if (!is_array($sec)) continue;
+-        if (array_key_exists('gdt_output', $sec) && $sec['gdt_output'] === false) continue;
+-        $title = ascii_only(clean_utf8_text((string)($sec['title'] ?? ''), 200));
+-        if ($title === '') continue;
+-
+-        $bullets = section_bullets($sec, $answers);
+-        if (count($bullets) === 0) continue;
+-
+-        $out = array_merge($out, build_section_block_lines($title, $bullets, $maxBytes));
+-    }
+-    if (isset($yaml['gdt']) && is_array($yaml['gdt'])) {
+-        $out = array_merge($out, build_configured_gdt_lines($yaml, $answers, $maxBytes));
+-    } else {
+-        $out = array_merge($out, build_gdt_summary_lines($yaml, $answers, $maxBytes));
+-    }
+-    return $out;
+-}
+-
+-function norm_contact(string $s): string {
+-    $s = ascii_only(clean_utf8_text($s, 200));
+-    $s = preg_replace('/\s+/', ' ', $s) ?? $s;
+-    return trim($s);
+-}
+-
+-function format_gebdat(string $s): string {
+-    $digits = preg_replace('/\D+/', '', $s) ?? '';
+-    if (strlen($digits) >= 8) $digits = substr($digits, 0, 8);
+-    if (strlen($digits) !== 8) return ($s !== '' ? $s : '—');
+-    return substr($digits, 0, 2) . '.' . substr($digits, 2, 2) . '.' . substr($digits, 4, 4);
+-}
+-
+-function parse_float_de(string $s): ?float {
+-    $s = trim($s);
+-    if ($s === '') return null;
+-    $s = str_replace(',', '.', $s);
+-    $s = preg_replace('/[^0-9.]/', '', $s) ?? $s;
+-    if ($s === '' || $s === '.') return null;
+-    return (float)$s;
+-}
+-
+-function ymd_today(): string { return date('Ymd'); }
+-
+-function form_yaml_for_id(string $formDir, string $formId, int $maxLength): array {
+-    if ($formId === '' || strlen($formId) > $maxLength) {
+-        return ['error' => 'Ungueltige Formular-ID: ' . $formId];
+-    }
+-
+-    $matches = [];
+-    $yamlFiles = [];
+-    foreach ((array)@scandir($formDir) as $name) {
+-        if (!is_string($name)) continue;
+-        if (!preg_match('/^(?:(\\d+)-)?([a-z][a-z0-9_-]*)\\.yaml$/', $name, $m)) continue;
+-        $path = rtrim($formDir, '/') . '/' . $name;
+-        if (!is_file($path)) continue;
+-        $yamlFile = [
+-            'path' => $path,
+-            'priority' => ($m[1] === '') ? 1000 : (int)$m[1],
+-        ];
+-        $yamlFiles[] = $yamlFile;
+-        if ($m[2] === $formId) $matches[] = $yamlFile;
+-    }
+-
+-    // Wenn kein Dateiname exakt passt, duerfen YAML-Dateien weitere IDs
+-    // deklarieren. Dadurch bleiben neue Formulare ohne PHP-Sonderlogik moeglich.
+-    if (count($matches) === 0 && function_exists('yaml_parse_file')) {
+-        foreach ($yamlFiles as $yamlFile) {
+-            $data = @yaml_parse_file((string)$yamlFile['path']);
+-            if (!is_array($data)) continue;
+-            $formIds = $data['meta']['form_ids'] ?? [];
+-            if (!is_array($formIds)) $formIds = [$formIds];
+-            foreach ($formIds as $declaredId) {
+-                if ((string)$declaredId !== $formId) continue;
+-                $matches[] = $yamlFile;
+-                break;
+-            }
+-        }
+-    }
+-
+-    if (count($matches) === 0) {
+-        return ['error' => 'Formular-YAML nicht gefunden: ' . $formId . '.yaml'];
+-    }
+-    if (count($matches) > 1) {
+-        return ['error' => 'Mehrere Formular-YAML-Dateien fuer ' . $formId . ' gefunden.'];
+-    }
+-    return $matches[0];
+-}
+-
+-/**
+- * Ermittelt die Folgeformulare, die nach dem aktuellen Formular angefordert
+- * werden sollen. Das YAML-Schema lautet:
+- *
+- * follow_up_forms:
+- *   - form: act
+- *     when:
+- *       id: asthma
+- *       equals: true
+- */
+-function follow_up_forms_for_answers(
+-    array $yaml,
+-    array $answers,
+-    string $currentFormId,
+-    string $formDir,
+-    int $maxFormIdLength
+-): array {
+-    $rules = $yaml['follow_up_forms'] ?? [];
+-    if ($rules === null || $rules === []) {
+-        return ['forms' => [], 'errors' => []];
+-    }
+-    if (!is_array($rules)) {
+-        return ['forms' => [], 'errors' => ['follow_up_forms muss eine Liste sein.']];
+-    }
+-
+-    $forms = [];
+-    $errors = [];
+-    $seen = [];
+-
+-    foreach ($rules as $index => $rule) {
+-        if (!is_array($rule)) {
+-            $errors[] = 'follow_up_forms[' . (string)$index . '] ist ungueltig.';
+-            continue;
+-        }
+-
+-        $condition = $rule['when'] ?? null;
+-        if (!is_array($condition) || !cond_ok($answers, $condition)) continue;
+-
+-        $formId = trim((string)($rule['form'] ?? ''));
+-        if (!preg_match('/^[a-z][a-z0-9_-]{0,3}$/', $formId)) {
+-            $errors[] = 'Ungueltige Folgeformular-ID: ' . $formId;
+-            continue;
+-        }
+-        if ($formId === $currentFormId) {
+-            $errors[] = 'Folgeformular darf nicht sich selbst ausloesen: ' . $formId;
+-            continue;
+-        }
+-        if (isset($seen[$formId])) continue;
+-
+-        $yamlInfo = form_yaml_for_id($formDir, $formId, $maxFormIdLength);
+-        if (isset($yamlInfo['error'])) {
+-            $errors[] = 'Folgeformular ' . $formId . ': ' . (string)$yamlInfo['error'];
+-            continue;
+-        }
+-
+-        $seen[$formId] = true;
+-        $forms[] = [
+-            'form_id' => $formId,
+-            'yaml_path' => (string)$yamlInfo['path'],
+-            'priority' => (int)$yamlInfo['priority'],
+-        ];
+-    }
+-
+-    usort($forms, static function (array $a, array $b): int {
+-        return [$a['priority'], $a['form_id']] <=> [$b['priority'], $b['form_id']];
+-    });
+-
+-    return ['forms' => $forms, 'errors' => $errors];
+-}
+-
+-/**
+- * Legt Folgeauftraege als sichere Kopien der aktuellen Eingabe-GDT an.
+- * Der temporaere Dateiname wird erst nach vollstaendigem Kopieren per Hardlink
+- * sichtbar gemacht, damit tablet.php keine halbe GDT-Datei einliest.
+- */
+-function create_follow_up_requests(
+-    string $dirGdt,
+-    string $tabletPrefix,
+-    string $sourcePath,
+-    string $currentFormId,
+-    array $followUpForms
+-): array {
+-    $created = [];
+-    $existing = [];
+-    $errors = [];
+-
+-    foreach ($followUpForms as $followUp) {
+-        $formId = (string)($followUp['form_id'] ?? '');
+-        if ($formId === '' || $formId === $currentFormId) {
+-            $errors[] = 'Ungueltiges Folgeformular: ' . $formId;
+-            continue;
+-        }
+-
+-        $name = $tabletPrefix . $formId . '-i.gdt';
+-        $path = rtrim($dirGdt, '/') . '/' . $name;
+-        if (is_file($path)) {
+-            $existing[] = $name;
+-            continue;
+-        }
+-
+-        $tmp = @tempnam($dirGdt, '.fragebogenpi-followup-');
+-        if ($tmp === false || !@copy($sourcePath, $tmp)) {
+-            if ($tmp !== false) @unlink($tmp);
+-            $errors[] = 'Folgeauftrag konnte nicht vorbereitet werden: ' . $name;
+-            continue;
+-        }
+-
+-        if (@link($tmp, $path)) {
+-            @unlink($tmp);
+-            @chmod($path, 0664);
+-            $created[] = $name;
+-            continue;
+-        }
+-
+-        @unlink($tmp);
+-        if (is_file($path)) {
+-            $existing[] = $name;
+-        } else {
+-            $errors[] = 'Folgeauftrag konnte nicht angelegt werden: ' . $name;
+-        }
+-    }
+-
+-    return ['created' => $created, 'existing' => $existing, 'errors' => $errors];
+-}
+-
+-function tablet_input_pattern(string $tabletId): string {
+-    $prefix = ($tabletId === '') ? '' : preg_quote($tabletId . '-', '/');
+-    return '/^' . $prefix . '([a-z][a-z0-9_-]{0,3})-i\\.gdt$/';
+-}
+-
+-function collect_tablet_requests(string $dirGdt, string $formDir, string $tabletId, int $maxFormIdLength): array {
+-    $requests = [];
+-    $allRequests = [];
+-    $errors = [];
+-    $pattern = tablet_input_pattern($tabletId);
+-
+-    foreach ((array)@scandir($dirGdt) as $name) {
+-        if (!is_string($name) || !preg_match($pattern, $name, $m)) continue;
+-        $path = rtrim($dirGdt, '/') . '/' . $name;
+-        if (!is_file($path)) continue;
+-
+-        $fields = parse_gdt($path);
+-        $allRequests[] = [
+-            'name' => $name,
+-            'path' => $path,
+-            'form_id' => $m[1],
+-            'fields' => $fields,
+-        ];
+-
+-        $yamlInfo = form_yaml_for_id($formDir, $m[1], $maxFormIdLength);
+-        if (isset($yamlInfo['error'])) {
+-            $errors[] = $name . ': ' . $yamlInfo['error'];
+-            continue;
+-        }
+-
+-        $requests[] = [
+-            'name' => $name,
+-            'path' => $path,
+-            'form_id' => $m[1],
+-            'yaml_path' => $yamlInfo['path'],
+-            'priority' => $yamlInfo['priority'],
+-            'fields' => $fields,
+-        ];
+-    }
+-
+-    usort($requests, static function (array $a, array $b): int {
+-        return [$a['priority'], $a['name']] <=> [$b['priority'], $b['name']];
+-    });
+-
+-    return ['requests' => $requests, 'all' => $allRequests, 'errors' => $errors];
+-}
+-
+-function patient_identity(array $fields): array {
+-    $identity = [];
+-    foreach (['3000', '0193', '3101', '3102', '3103'] as $field) {
+-        $value = (string)($fields[$field] ?? '');
+-        $identity[$field] = $value;
+-    }
+-    return $identity;
+-}
+-
+-function has_patient_identity(array $fields): bool {
+-    return trim((string)($fields['3000'] ?? '')) !== ''
+-        || trim((string)($fields['0193'] ?? '')) !== '';
+-}
+-
+-function requests_have_identity_conflict(array $requests): bool {
+-    if (count($requests) < 2) return false;
+-    $known = [];
+-    foreach ($requests as $request) {
+-        foreach (patient_identity($request['fields']) as $field => $value) {
+-            if ($value === '') continue;
+-            if (isset($known[$field]) && $known[$field] !== $value) return true;
+-            $known[$field] = $value;
+-        }
+-    }
+-    return false;
+-}
++// Shared YAML engine; GDT transport below stays unchanged.
++require_once __DIR__ . '/tablet-engine.php';
+ 
+-function delete_request_files(array $requests): int {
+-    $deleted = 0;
+-    foreach ($requests as $request) {
+-        $path = (string)($request['path'] ?? '');
+-        if ($path !== '' && is_file($path) && @unlink($path)) $deleted++;
+-    }
+-    return $deleted;
+-}
+-
+ // ----------------- dir checks -----------------
+ if (!is_dir($dirGdt)) @mkdir($dirGdt, 0775, true);
+ if ((!is_dir($dirGdt) || !is_writable($dirGdt)) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+--- /dev/null
++++ b/tablet-engine.php
+@@ -0,0 +1,1076 @@
++<?php
++declare(strict_types=1);
++// fragebogenpi tablet-engine.php v1.8.3; shared unchanged helpers from tablet.php 1.8.2.
++function h(string $s): string { return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
++
++function is_valid_utf8(string $s): bool {
++    return $s === '' ? true : (bool)@preg_match('//u', $s);
++}
++
++function req_to_utf8_for_ui(string $raw): string {
++    if ($raw === '') return '';
++    if (is_valid_utf8($raw)) return $raw;
++
++    if (function_exists('iconv')) {
++        foreach (['CP437', 'ISO-8859-1', 'Windows-1252'] as $enc) {
++            $tmp = @iconv($enc, 'UTF-8//IGNORE', $raw);
++            if ($tmp !== false && $tmp !== '') return $tmp;
++        }
++    }
++    return $raw;
++}
++
++function translit_for_ui(string $raw): string {
++    $s = req_to_utf8_for_ui($raw);
++    $map = [
++        'Ä'=>'Ae','Ö'=>'Oe','Ü'=>'Ue','ä'=>'ae','ö'=>'oe','ü'=>'ue','ß'=>'ss',
++        '’'=>"'","´"=>"'","`"=>"'","“"=>'"',"”"=>'"',"„"=>'"',"–"=>'-',"—"=>'-',"…"=>'...',
++    ];
++    $s = strtr($s, $map);
++
++    if (function_exists('iconv')) {
++        $tmp = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $s);
++        if ($tmp !== false && $tmp !== '') $s = $tmp;
++    }
++
++    $s = preg_replace('/[^\x20-\x7E]/', '?', $s) ?? $s;
++    return $s;
++}
++
++function ascii_only(string $s): string {
++    $map = [
++        'Ä'=>'Ae','Ö'=>'Oe','Ü'=>'Ue','ä'=>'ae','ö'=>'oe','ü'=>'ue','ß'=>'ss',
++        '’'=>"'","´"=>"'","`"=>"'","“"=>'"',"”"=>'"',"„"=>'"',"–"=>'-',"—"=>'-',"…"=>'...',
++    ];
++    $s = strtr($s, $map);
++
++    if (function_exists('iconv')) {
++        $tmp = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $s);
++        if ($tmp !== false && $tmp !== '') $s = $tmp;
++    }
++
++    $s = preg_replace('/[^\x20-\x7E]/', '?', $s) ?? $s;
++    return $s;
++}
++
++function clean_utf8_text(string $s, int $maxLen = 200): string {
++    $s = str_replace(["\r", "\n", "\t"], ' ', $s);
++    $s = preg_replace('/\s+/', ' ', $s) ?? $s;
++    $s = trim($s);
++
++    if (function_exists('mb_substr')) {
++        $s = mb_substr($s, 0, $maxLen, 'UTF-8');
++    } else {
++        $s = substr($s, 0, $maxLen);
++    }
++
++    if (function_exists('iconv')) {
++        $fixed = @iconv('UTF-8', 'UTF-8//IGNORE', $s);
++        if ($fixed !== false) $s = $fixed;
++    }
++
++    return $s;
++}
++
++function req_value_passthrough(string $s, int $maxLen = 200): string {
++    $s = str_replace(["\r", "\n", "\t"], ' ', $s);
++    $s = preg_replace('/\s+/', ' ', $s) ?? $s;
++    $s = trim($s);
++    if (strlen($s) > $maxLen) $s = substr($s, 0, $maxLen);
++    return $s;
++}
++
++function json_out(int $code, array $payload): void {
++    http_response_code($code);
++    header('Content-Type: application/json; charset=utf-8');
++    header('Cache-Control: no-store');
++
++    $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
++    if ($json === false) {
++        $json = json_encode([
++            'status' => 'error',
++            'message' => 'json_encode fehlgeschlagen',
++        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{"status":"error","message":"json_encode failed"}';
++    }
++
++    echo $json;
++    exit;
++}
++
++function gdt_line(string $field4, string $value): string {
++    $rest = $field4 . $value;
++    $len  = 3 + strlen($rest) + 2; // +CRLF
++    return str_pad((string)$len, 3, '0', STR_PAD_LEFT) . $rest;
++}
++
++function parse_gdt(string $path): array {
++    $raw = file_get_contents($path);
++    if ($raw === false) return [];
++    $raw = str_replace("\r\n", "\n", $raw);
++    $lines = array_filter(explode("\n", $raw), fn($l) => trim($l) !== '');
++
++    $fields = [];
++    foreach ($lines as $line) {
++        if (strlen($line) < 7) continue;
++        $rest  = substr($line, 3);
++        $field = substr($rest, 0, 4);
++        $value = substr($rest, 4);
++        $fields[$field] = $value; // raw bytes beibehalten
++    }
++    return $fields;
++}
++
++function write_gdt_file(string $path, array $lines): void {
++    $joined = implode("\r\n", $lines) . "\r\n";
++    $totalBytes = strlen($joined);
++    $total6 = str_pad((string)$totalBytes, 6, '0', STR_PAD_LEFT);
++
++    foreach ($lines as $i => $line) {
++        $rest = substr($line, 3);
++        $field = substr($rest, 0, 4);
++        if ($field === '8100') {
++            $lines[$i] = gdt_line('8100', $total6);
++            break;
++        }
++    }
++
++    $joined2 = implode("\r\n", $lines) . "\r\n";
++    $totalBytes2 = strlen($joined2);
++    if ($totalBytes2 !== $totalBytes) {
++        $total6b = str_pad((string)$totalBytes2, 6, '0', STR_PAD_LEFT);
++        foreach ($lines as $i => $line) {
++            $rest = substr($line, 3);
++            $field = substr($rest, 0, 4);
++            if ($field === '8100') {
++                $lines[$i] = gdt_line('8100', $total6b);
++                break;
++            }
++        }
++        $joined2 = implode("\r\n", $lines) . "\r\n";
++    }
++
++    file_put_contents($path, $joined2);
++}
++
++function to_ascii_wrapped_lines(string $s, int $maxBytes, string $firstPrefix = '', string $nextPrefix = ''): array {
++    $s = clean_utf8_text($s, 5000);
++    $s = ascii_only($s);
++
++    $candidate = $firstPrefix . $s;
++    if (strlen($candidate) <= $maxBytes) return [$candidate];
++
++    $words = preg_split('/\s+/', $s) ?: [];
++    $out = [];
++    $cur = '';
++    $isFirst = true;
++
++    foreach ($words as $w) {
++        $try = ($cur === '') ? $w : ($cur . ' ' . $w);
++        $prefix = $isFirst ? $firstPrefix : $nextPrefix;
++        if (strlen($prefix . $try) <= $maxBytes) {
++            $cur = $try;
++            continue;
++        }
++
++        if ($cur !== '') {
++            $prefix2 = $isFirst ? $firstPrefix : $nextPrefix;
++            $out[] = $prefix2 . $cur;
++            $isFirst = false;
++            $cur = $w;
++            continue;
++        }
++
++        $out[] = substr($prefix . $w, 0, $maxBytes);
++        $isFirst = false;
++        $cur = '';
++    }
++
++    if ($cur !== '') {
++        $prefix3 = $isFirst ? $firstPrefix : $nextPrefix;
++        $out[] = $prefix3 . $cur;
++    }
++
++    foreach ($out as &$line) $line = ascii_only($line);
++    return $out;
++}
++
++/** YAML lesen und alle Strings rekursiv ASCII-only machen */
++function yaml_load_or_die_ascii(string $path): array {
++    if (!is_file($path)) return ['__error' => 'YAML-Datei nicht gefunden: ' . $path];
++    if (!function_exists('yaml_parse_file')) return ['__error' => 'PHP YAML Extension fehlt (yaml_parse_file nicht verfuegbar). Bitte php-yaml installieren.'];
++    $data = @yaml_parse_file($path);
++    if (!is_array($data)) return ['__error' => 'YAML konnte nicht geparst werden oder ist leer/ungueltig.'];
++    return yaml_ascii_walk($data);
++}
++
++function yaml_ascii_walk($v) {
++    if (is_string($v)) return ascii_only($v);
++    if (is_array($v)) {
++        $out = [];
++        foreach ($v as $k => $vv) {
++            $kk = is_string($k) ? ascii_only($k) : $k;
++            $out[$kk] = yaml_ascii_walk($vv);
++        }
++        return $out;
++    }
++    return $v;
++}
++
++function cond_ok(array $answers, ?array $cond): bool {
++    if (!$cond) return true;
++    $id = (string)($cond['id'] ?? '');
++    if ($id === '') return true;
++    $val = $answers[$id] ?? null;
++
++    $eq  = $cond['equals'] ?? null;
++    $neq = $cond['not_equals'] ?? null;
++
++    if (is_bool($val)) {
++        if ($eq === 'yes') $eq = true;
++        if ($eq === 'no')  $eq = false;
++        if ($neq === 'yes') $neq = true;
++        if ($neq === 'no')  $neq = false;
++    } elseif (is_string($val)) {
++        if ($val === 'yes' && $eq === true) $eq = 'yes';
++        if ($val === 'no'  && $eq === false) $eq = 'no';
++        if ($val === 'yes' && $neq === true) $neq = 'yes';
++        if ($val === 'no'  && $neq === false) $neq = 'no';
++    }
++
++    if (array_key_exists('equals', $cond)) return $val === $eq;
++    if (array_key_exists('not_equals', $cond)) return $val !== $neq;
++
++    if (array_key_exists('greater_than_or_equal', $cond)) {
++        $minimum = $cond['greater_than_or_equal'];
++        if (!is_numeric($val) || !is_numeric($minimum)) return false;
++        return (float)$val >= (float)$minimum;
++    }
++
++    if (array_key_exists('in', $cond)) {
++        $lst = $cond['in'];
++        if (!is_array($lst)) $lst = [];
++        $norm = ascii_only(clean_utf8_text((string)$val, 200));
++        foreach ($lst as $x) {
++            $x = ascii_only(clean_utf8_text((string)$x, 200));
++            if ($x !== '' && $norm === $x) return true;
++        }
++        return false;
++    }
++
++    if (array_key_exists('any_selected_except', $cond)) {
++        $except = ascii_only(clean_utf8_text((string)$cond['any_selected_except'], 200));
++        if (!is_array($val)) return false;
++        foreach ($val as $opt) {
++            $opt = ascii_only(clean_utf8_text((string)$opt, 200));
++            if ($opt === '') continue;
++            if ($except === '') return true;
++            if ($opt !== $except) return true;
++        }
++        return false;
++    }
++
++    return true;
++}
++
++function build_section_block_lines(string $title, array $bullets, int $maxBytes): array {
++    $out = [];
++    foreach (to_ascii_wrapped_lines('---', $maxBytes) as $l) $out[] = gdt_line('6228', $l);
++    foreach (to_ascii_wrapped_lines($title, $maxBytes) as $l) $out[] = gdt_line('6228', $l);
++    foreach (to_ascii_wrapped_lines('========', $maxBytes) as $l) $out[] = gdt_line('6228', $l);
++    foreach ($bullets as $b) {
++        foreach (to_ascii_wrapped_lines($b, $maxBytes, '- ', '  ') as $l) $out[] = gdt_line('6228', $l);
++    }
++    return $out;
++}
++
++function yaml_questions_by_id(array $yaml): array {
++    $out = [];
++    $sections = $yaml['sections'] ?? [];
++    if (!is_array($sections)) return $out;
++
++    foreach ($sections as $section) {
++        if (!is_array($section)) continue;
++        $questions = $section['questions'] ?? [];
++        if (!is_array($questions)) continue;
++        foreach ($questions as $question) {
++            if (!is_array($question)) continue;
++            $id = (string)($question['id'] ?? '');
++            if ($id !== '') $out[$id] = $question;
++        }
++    }
++    return $out;
++}
++
++function numeric_value(string $value): int|float|null {
++    if ($value === '' || !is_numeric($value)) return null;
++    $number = (float)$value;
++    return floor($number) === $number ? (int)$number : $number;
++}
++
++function scale_answer_valid(array $question, mixed $answer): bool {
++    if (!is_string($answer) || $answer === '') return false;
++    $value = numeric_value($answer);
++    if ($value === null) return false;
++
++    $scale = $question['scale'] ?? [];
++    if (!is_array($scale)) return false;
++    $minimum = isset($scale['minimum']) && is_numeric($scale['minimum']) ? (float)$scale['minimum'] : 0.0;
++    $maximum = isset($scale['maximum']) && is_numeric($scale['maximum']) ? (float)$scale['maximum'] : 10.0;
++    $step = isset($scale['step']) && is_numeric($scale['step']) ? (float)$scale['step'] : 1.0;
++    if ($step <= 0 || (float)$value < $minimum || (float)$value > $maximum) return false;
++
++    $steps = ((float)$value - $minimum) / $step;
++    return abs($steps - round($steps)) < 0.000001;
++}
++
++function question_score(array $question, mixed $answer): int|float|null {
++    if (!is_string($answer) || $answer === '') return null;
++    if ((string)($question['type'] ?? '') === 'scale') {
++        return scale_answer_valid($question, $answer) ? numeric_value($answer) : null;
++    }
++
++    $scores = $question['scores'] ?? [];
++    if (!is_array($scores) || !array_key_exists($answer, $scores)) return null;
++    return is_numeric($scores[$answer]) ? numeric_value((string)$scores[$answer]) : null;
++}
++
++function derive_yaml_answers(array $yaml, array &$answers): void {
++    $questionsById = yaml_questions_by_id($yaml);
++
++    foreach ($questionsById as $id => $question) {
++        if ((string)($question['type'] ?? '') !== 'derived') continue;
++        $calculation = $question['calculation'] ?? null;
++        if (!is_array($calculation) || (string)($calculation['operation'] ?? '') !== 'sum_scores') continue;
++
++        $fields = $calculation['fields'] ?? [];
++        if (!is_array($fields) || count($fields) === 0) continue;
++
++        $sum = 0;
++        $complete = true;
++        foreach ($fields as $field) {
++            $field = (string)$field;
++            $score = isset($questionsById[$field])
++                ? question_score($questionsById[$field], $answers[$field] ?? null)
++                : null;
++            if ($score === null) {
++                $complete = false;
++                break;
++            }
++            $sum += $score;
++        }
++        if ($complete) $answers[$id] = $sum;
++    }
++
++    foreach ($questionsById as $id => $question) {
++        if ((string)($question['type'] ?? '') !== 'derived') continue;
++        $source = (string)($question['source'] ?? '');
++        $ranges = $question['ranges'] ?? [];
++        if ($source === '' || !isset($answers[$source]) || !is_array($ranges)) continue;
++
++        $value = (float)$answers[$source];
++        foreach ($ranges as $range) {
++            if (!is_array($range)) continue;
++            $minimum = isset($range['minimum']) && is_numeric($range['minimum']) ? (float)$range['minimum'] : -INF;
++            $maximum = isset($range['maximum']) && is_numeric($range['maximum']) ? (float)$range['maximum'] : INF;
++            if ($value < $minimum || $value > $maximum) continue;
++            $status = ascii_only(clean_utf8_text((string)($range['status'] ?? ''), 300));
++            if ($status !== '') $answers[$id] = $status;
++            break;
++        }
++    }
++}
++
++function validate_yaml_answers(array $yaml, array $answers): array {
++    $errors = [];
++    $sections = $yaml['sections'] ?? [];
++    if (!is_array($sections)) return $errors;
++
++    foreach ($sections as $section) {
++        if (!is_array($section)) continue;
++        if (isset($section['show_if']) && is_array($section['show_if']) && !cond_ok($answers, $section['show_if'])) continue;
++        $sectionType = (string)($section['type'] ?? '');
++        $questions = $section['questions'] ?? [];
++        if (!is_array($questions)) continue;
++
++        foreach ($questions as $question) {
++            if (!is_array($question)) continue;
++            $id = (string)($question['id'] ?? '');
++            $type = (string)($question['type'] ?? '');
++            $label = ascii_only(clean_utf8_text((string)($question['label'] ?? $id), 300));
++            if ($id === '' || $type === 'derived' || $type === 'header') continue;
++            if (isset($question['show_if']) && is_array($question['show_if']) && !cond_ok($answers, $question['show_if'])) continue;
++
++            $value = $answers[$id] ?? null;
++            $empty = $sectionType === 'checklist'
++                ? $value !== true
++                : (is_array($value) ? count($value) === 0 : trim((string)$value) === '');
++
++            if (!empty($question['required']) && $empty) {
++                $errors[] = 'Pflichtfrage unbeantwortet: ' . $label;
++                continue;
++            }
++            if ($empty) continue;
++
++            if ($type === 'scale' && !scale_answer_valid($question, $value)) {
++                $errors[] = 'Ungueltiger Skalenwert: ' . $label;
++                continue;
++            }
++            if ($type === 'choice') {
++                $options = $question['options'] ?? [];
++                if (is_array($options) && !in_array((string)$value, array_map('strval', $options), true)) {
++                    $errors[] = 'Ungueltige Auswahl: ' . $label;
++                }
++                continue;
++            }
++            if ($type === 'yesno' && !in_array((string)$value, ['yes', 'no'], true)) {
++                $errors[] = 'Ungueltige Auswahl: ' . $label;
++            }
++        }
++    }
++
++    return $errors;
++}
++
++function configured_score_maximum(array $element, array $questionsById, string $source): int|float|null {
++    if (isset($element['maximum']) && is_numeric($element['maximum'])) {
++        return numeric_value((string)$element['maximum']);
++    }
++    if ($source === '' || !isset($questionsById[$source]) || !is_array($questionsById[$source])) return null;
++
++    $question = $questionsById[$source];
++    $calculation = $question['calculation'] ?? [];
++    if (is_array($calculation) && isset($calculation['maximum']) && is_numeric($calculation['maximum'])) {
++        return numeric_value((string)$calculation['maximum']);
++    }
++
++    $scale = $question['scale'] ?? [];
++    if (is_array($scale) && isset($scale['maximum']) && is_numeric($scale['maximum'])) {
++        return numeric_value((string)$scale['maximum']);
++    }
++    return null;
++}
++
++function build_gdt_summary_lines(array $yaml, array $answers, int $maxBytes): array {
++    $summary = $yaml['gdt_summary'] ?? null;
++    if (!is_array($summary)) return [];
++
++    $title = ascii_only(clean_utf8_text((string)($summary['title'] ?? ''), 200));
++    if ($title === '') return [];
++
++    $content = [];
++    $questionsById = yaml_questions_by_id($yaml);
++    $score = $summary['score'] ?? null;
++    if (is_array($score)) {
++        $source = (string)($score['source'] ?? '');
++        if ($source !== '' && isset($answers[$source]) && is_numeric($answers[$source])) {
++            $label = ascii_only(clean_utf8_text((string)($score['label'] ?? 'Punktwert'), 100));
++            $suffix = ascii_only(clean_utf8_text((string)($score['suffix'] ?? 'Punkte'), 100));
++            $value = numeric_value((string)$answers[$source]);
++            if ($value !== null) {
++                $scoreText = numeric_text($value);
++                $maximum = configured_score_maximum($score, $questionsById, $source);
++                if ($maximum !== null) $scoreText .= '/' . numeric_text($maximum);
++                $content[] = trim($label . ': ' . $scoreText . ' ' . $suffix);
++            }
++        }
++    }
++
++    $assessment = $summary['assessment'] ?? null;
++    if (is_array($assessment)) {
++        $source = (string)($assessment['source'] ?? '');
++        $value = ascii_only(clean_utf8_text((string)($answers[$source] ?? ''), 300));
++        if ($value !== '') $content[] = $value;
++    }
++
++    $problemLines = [];
++    $problems = $summary['problems'] ?? null;
++    if (is_array($problems)) {
++        $questionsById = yaml_questions_by_id($yaml);
++        $fields = $problems['fields'] ?? [];
++        if (is_array($fields)) {
++            foreach ($fields as $field) {
++                if (!is_array($field)) continue;
++                $id = (string)($field['id'] ?? '');
++                if ($id === '' || !isset($questionsById[$id])) continue;
++                $scoreValue = question_score($questionsById[$id], $answers[$id] ?? null);
++                $maximumScore = isset($field['maximum_score']) && is_numeric($field['maximum_score'])
++                    ? (int)$field['maximum_score']
++                    : PHP_INT_MAX;
++                $minimumScore = isset($field['minimum_score']) && is_numeric($field['minimum_score'])
++                    ? (int)$field['minimum_score']
++                    : PHP_INT_MIN;
++                if ($scoreValue === null || $scoreValue < $minimumScore || $scoreValue > $maximumScore) continue;
++                $text = ascii_only(clean_utf8_text((string)($field['text'] ?? ''), 300));
++                if ($text !== '') $problemLines[] = $text;
++            }
++        }
++    }
++
++    if (count($content) === 0 && count($problemLines) === 0) return [];
++
++    $out = [];
++    foreach (to_ascii_wrapped_lines('---', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
++    foreach (to_ascii_wrapped_lines($title, $maxBytes) as $line) $out[] = gdt_line('6228', $line);
++    foreach (to_ascii_wrapped_lines('========', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
++    foreach ($content as $item) {
++        foreach (to_ascii_wrapped_lines($item, $maxBytes) as $line) $out[] = gdt_line('6228', $line);
++    }
++    if (count($problemLines) > 0) {
++        $out[] = gdt_line('6228', '');
++        $problemTitle = ascii_only(clean_utf8_text((string)($problems['title'] ?? 'Problemfelder'), 200));
++        foreach (to_ascii_wrapped_lines($problemTitle . ':', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
++        foreach ($problemLines as $item) {
++            foreach (to_ascii_wrapped_lines($item, $maxBytes, '- ', '  ') as $line) $out[] = gdt_line('6228', $line);
++        }
++    }
++    return $out;
++}
++
++function numeric_text(int|float $value): string {
++    if (is_int($value) || floor($value) === $value) return (string)(int)$value;
++    return rtrim(rtrim(number_format($value, 6, '.', ''), '0'), '.');
++}
++
++function build_configured_gdt_lines(array $yaml, array $answers, int $maxBytes): array {
++    $gdt = $yaml['gdt'] ?? null;
++    if (!is_array($gdt)) return [];
++    $sections = $gdt['sections'] ?? [];
++    if (!is_array($sections)) return [];
++
++    $questionsById = yaml_questions_by_id($yaml);
++    $out = [];
++
++    foreach ($sections as $section) {
++        if (!is_array($section)) continue;
++        if (isset($section['show_if']) && is_array($section['show_if']) && !cond_ok($answers, $section['show_if'])) continue;
++
++        $title = ascii_only(clean_utf8_text((string)($section['title'] ?? ''), 200));
++        $elements = $section['elements'] ?? [];
++        if ($title === '' || !is_array($elements)) continue;
++
++        $sectionLines = [];
++        foreach ($elements as $element) {
++            if (!is_array($element)) continue;
++            $type = (string)($element['type'] ?? '');
++
++            if ($type === 'score') {
++                $source = (string)($element['source'] ?? '');
++                $value = $answers[$source] ?? null;
++                if (!is_int($value) && !is_float($value)) continue;
++                $label = ascii_only(clean_utf8_text((string)($element['label'] ?? 'Punktwert'), 100));
++                $suffix = ascii_only(clean_utf8_text((string)($element['suffix'] ?? ''), 100));
++                $singularSuffix = ascii_only(clean_utf8_text((string)($element['singular_suffix'] ?? ''), 100));
++                $maximum = configured_score_maximum($element, $questionsById, $source);
++                if ($maximum === null && (float)$value === 1.0 && $singularSuffix !== '') $suffix = $singularSuffix;
++                $scoreText = numeric_text($value);
++                if ($maximum !== null) $scoreText .= '/' . numeric_text($maximum);
++                $line = $label . ': ' . $scoreText;
++                if ($suffix !== '') $line .= ' ' . $suffix;
++                $sectionLines[] = ['kind' => 'line', 'text' => $line];
++                continue;
++            }
++
++            if ($type === 'interpretation' || $type === 'value') {
++                $source = (string)($element['source'] ?? '');
++                $value = ascii_only(clean_utf8_text((string)($answers[$source] ?? ''), 600));
++                if ($value === '') continue;
++                $label = ascii_only(clean_utf8_text((string)($element['label'] ?? ''), 100));
++                $suffix = ascii_only(clean_utf8_text((string)($element['suffix'] ?? ''), 100));
++                if ($label !== '') $value = $label . ': ' . $value;
++                if ($suffix !== '') $value .= ' ' . $suffix;
++                $sectionLines[] = ['kind' => 'line', 'text' => $value];
++                continue;
++            }
++
++            if ($type === 'text') {
++                $value = ascii_only(clean_utf8_text((string)($element['text'] ?? ''), 600));
++                if ($value !== '') $sectionLines[] = ['kind' => 'line', 'text' => $value];
++                continue;
++            }
++
++            if ($type === 'answer_list') {
++                $fields = $element['fields'] ?? [];
++                if (!is_array($fields)) continue;
++                $items = [];
++
++                foreach ($fields as $field) {
++                    $fieldConfig = is_array($field) ? $field : ['id' => $field];
++                    $id = (string)($fieldConfig['id'] ?? '');
++                    if ($id === '' || !isset($questionsById[$id])) continue;
++                    $question = $questionsById[$id];
++                    if (isset($question['show_if']) && is_array($question['show_if']) && !cond_ok($answers, $question['show_if'])) continue;
++                    $rawValue = $answers[$id] ?? null;
++
++                    if (is_array($rawValue)) {
++                        $value = implode(', ', array_map('strval', $rawValue));
++                    } elseif ($rawValue === true) {
++                        $value = 'Ja';
++                    } elseif ($rawValue === false) {
++                        $value = 'Nein';
++                    } else {
++                        $value = (string)$rawValue;
++                    }
++                    $value = ascii_only(clean_utf8_text($value, 1000));
++                    if ($value === '' && empty($fieldConfig['include_empty'])) continue;
++                    if ($value === '') $value = 'Keine Angabe';
++
++                    $label = (string)($fieldConfig['label'] ?? ($question['label'] ?? $id));
++                    $label = ascii_only(clean_utf8_text($label, 500));
++                    if ($label !== '') $items[] = $label . ': ' . $value;
++                }
++
++                if (count($items) > 0) {
++                    $listTitle = ascii_only(clean_utf8_text((string)($element['title'] ?? ''), 200));
++                    $sectionLines[] = ['kind' => 'answer_list', 'title' => $listTitle, 'items' => $items];
++                }
++                continue;
++            }
++
++            if ($type !== 'problem_list') continue;
++            $fields = $element['fields'] ?? [];
++            if (!is_array($fields)) continue;
++            $minimumScore = isset($element['minimum_score']) && is_numeric($element['minimum_score'])
++                ? (float)$element['minimum_score']
++                : -INF;
++            $maximumScore = isset($element['maximum_score']) && is_numeric($element['maximum_score'])
++                ? (float)$element['maximum_score']
++                : INF;
++            $items = [];
++
++            foreach ($fields as $field) {
++                $fieldConfig = is_array($field) ? $field : ['id' => $field];
++                $id = (string)($fieldConfig['id'] ?? '');
++                if ($id === '' || !isset($questionsById[$id])) continue;
++                $question = $questionsById[$id];
++                $score = question_score($question, $answers[$id] ?? null);
++                $fieldMinimum = isset($fieldConfig['minimum_score']) && is_numeric($fieldConfig['minimum_score'])
++                    ? (float)$fieldConfig['minimum_score']
++                    : $minimumScore;
++                $fieldMaximum = isset($fieldConfig['maximum_score']) && is_numeric($fieldConfig['maximum_score'])
++                    ? (float)$fieldConfig['maximum_score']
++                    : $maximumScore;
++                if ($score === null || (float)$score < $fieldMinimum || (float)$score > $fieldMaximum) continue;
++
++                $text = (string)($fieldConfig['text'] ?? ($question['problem_label'] ?? ($question['label'] ?? '')));
++                $text = ascii_only(clean_utf8_text($text, 300));
++                if ($text !== '') $items[] = $text;
++            }
++
++            if (count($items) > 0) {
++                $listTitle = ascii_only(clean_utf8_text((string)($element['title'] ?? 'Problemfelder'), 200));
++                $sectionLines[] = ['kind' => 'problem_list', 'title' => $listTitle, 'items' => $items];
++            }
++        }
++
++        if (count($sectionLines) === 0) continue;
++        $separatorLines = isset($section['separator_lines']) && is_numeric($section['separator_lines'])
++            ? max(1, min(5, (int)$section['separator_lines']))
++            : 1;
++        for ($separator = 0; $separator < $separatorLines; $separator++) {
++            foreach (to_ascii_wrapped_lines('---', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
++        }
++        foreach (to_ascii_wrapped_lines($title, $maxBytes) as $line) $out[] = gdt_line('6228', $line);
++        foreach (to_ascii_wrapped_lines('========', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
++
++        foreach ($sectionLines as $lineConfig) {
++            if ($lineConfig['kind'] === 'line') {
++                foreach (to_ascii_wrapped_lines((string)$lineConfig['text'], $maxBytes) as $line) $out[] = gdt_line('6228', $line);
++                continue;
++            }
++
++            if ((string)$lineConfig['title'] !== '') {
++                $out[] = gdt_line('6228', '');
++                foreach (to_ascii_wrapped_lines((string)$lineConfig['title'] . ':', $maxBytes) as $line) $out[] = gdt_line('6228', $line);
++            }
++            foreach ($lineConfig['items'] as $item) {
++                foreach (to_ascii_wrapped_lines((string)$item, $maxBytes, '- ', '  ') as $line) $out[] = gdt_line('6228', $line);
++            }
++        }
++    }
++
++    return $out;
++}
++
++function section_bullets(array $section, array $answers): array {
++    $bullets = [];
++
++    if (isset($section['show_if']) && is_array($section['show_if'])) {
++        if (!cond_ok($answers, $section['show_if'])) return [];
++    }
++
++    $type = (string)($section['type'] ?? '');
++    $questions = $section['questions'] ?? [];
++    if (!is_array($questions)) return [];
++
++    if ($type === 'checklist') {
++        foreach ($questions as $q) {
++            if (!is_array($q)) continue;
++            $qType = (string)($q['type'] ?? '');
++            if ($qType === 'header') continue;
++
++            $id = (string)($q['id'] ?? '');
++            $label = (string)($q['label'] ?? '');
++            if ($id === '' || $label === '') continue;
++            if (($answers[$id] ?? false) === true) $bullets[] = $label;
++        }
++        return $bullets;
++    }
++
++    foreach ($questions as $q) {
++        if (!is_array($q)) continue;
++        $id = (string)($q['id'] ?? '');
++        $label = (string)($q['label'] ?? '');
++        $qType = (string)($q['type'] ?? '');
++        if ($id === '' || $label === '') continue;
++
++        if (isset($q['show_if']) && is_array($q['show_if'])) {
++            if (!cond_ok($answers, $q['show_if'])) continue;
++        }
++
++        $val = $answers[$id] ?? null;
++
++        if ($qType === 'yesno') {
++            if ($val === 'yes' || $val === true) $bullets[] = $label;
++            continue;
++        }
++
++        if ($qType === 'multiselect') {
++            if (is_array($val) && count($val) > 0) {
++                $direct = in_array($id, ['allergie_typen'], true);
++                foreach ($val as $opt) {
++                    $opt = ascii_only(clean_utf8_text((string)$opt, 200));
++                    if ($opt === '') continue;
++                    $bullets[] = $direct ? $opt : ($label . ': ' . $opt);
++                }
++            }
++            continue;
++        }
++
++        if ($qType === 'choice') {
++            $v = ascii_only(clean_utf8_text((string)$val, 200));
++            if ($v === '' || $v === 'nein' || $v === 'normal' || $v === 'konstant') continue;
++            $bullets[] = $label . ': ' . $v;
++            continue;
++        }
++
++        if ($qType === 'number' || $qType === 'text') {
++            $v = ascii_only(clean_utf8_text((string)$val, 600));
++            if ($v === '') continue;
++            $bullets[] = $label . ': ' . $v;
++            continue;
++        }
++
++        if ($qType === 'derived') {
++            if ($id === 'packyears') {
++                $v = ascii_only(clean_utf8_text((string)($answers['_packyears_text'] ?? ''), 200));
++                if ($v !== '') $bullets[] = $v;
++            }
++            continue;
++        }
++
++        if ($val === true) $bullets[] = $label;
++    }
++
++    return $bullets;
++}
++
++function build_6228_blocks(array $yaml, array $answers, int $maxBytes): array {
++    $out = [];
++    $sections = $yaml['sections'] ?? [];
++    if (!is_array($sections)) return [];
++
++    foreach ($sections as $sec) {
++        if (!is_array($sec)) continue;
++        if (array_key_exists('gdt_output', $sec) && $sec['gdt_output'] === false) continue;
++        $title = ascii_only(clean_utf8_text((string)($sec['title'] ?? ''), 200));
++        if ($title === '') continue;
++
++        $bullets = section_bullets($sec, $answers);
++        if (count($bullets) === 0) continue;
++
++        $out = array_merge($out, build_section_block_lines($title, $bullets, $maxBytes));
++    }
++    if (isset($yaml['gdt']) && is_array($yaml['gdt'])) {
++        $out = array_merge($out, build_configured_gdt_lines($yaml, $answers, $maxBytes));
++    } else {
++        $out = array_merge($out, build_gdt_summary_lines($yaml, $answers, $maxBytes));
++    }
++    return $out;
++}
++
++function norm_contact(string $s): string {
++    $s = ascii_only(clean_utf8_text($s, 200));
++    $s = preg_replace('/\s+/', ' ', $s) ?? $s;
++    return trim($s);
++}
++
++function format_gebdat(string $s): string {
++    $digits = preg_replace('/\D+/', '', $s) ?? '';
++    if (strlen($digits) >= 8) $digits = substr($digits, 0, 8);
++    if (strlen($digits) !== 8) return ($s !== '' ? $s : '—');
++    return substr($digits, 0, 2) . '.' . substr($digits, 2, 2) . '.' . substr($digits, 4, 4);
++}
++
++function parse_float_de(string $s): ?float {
++    $s = trim($s);
++    if ($s === '') return null;
++    $s = str_replace(',', '.', $s);
++    $s = preg_replace('/[^0-9.]/', '', $s) ?? $s;
++    if ($s === '' || $s === '.') return null;
++    return (float)$s;
++}
++
++function ymd_today(): string { return date('Ymd'); }
++
++function form_yaml_for_id(string $formDir, string $formId, int $maxLength): array {
++    if ($formId === '' || strlen($formId) > $maxLength) {
++        return ['error' => 'Ungueltige Formular-ID: ' . $formId];
++    }
++
++    $matches = [];
++    $yamlFiles = [];
++    foreach ((array)@scandir($formDir) as $name) {
++        if (!is_string($name)) continue;
++        if (!preg_match('/^(?:(\\d+)-)?([a-z][a-z0-9_-]*)\\.yaml$/', $name, $m)) continue;
++        $path = rtrim($formDir, '/') . '/' . $name;
++        if (!is_file($path)) continue;
++        $yamlFile = [
++            'path' => $path,
++            'priority' => ($m[1] === '') ? 1000 : (int)$m[1],
++        ];
++        $yamlFiles[] = $yamlFile;
++        if ($m[2] === $formId) $matches[] = $yamlFile;
++    }
++
++    // Wenn kein Dateiname exakt passt, duerfen YAML-Dateien weitere IDs
++    // deklarieren. Dadurch bleiben neue Formulare ohne PHP-Sonderlogik moeglich.
++    if (count($matches) === 0 && function_exists('yaml_parse_file')) {
++        foreach ($yamlFiles as $yamlFile) {
++            $data = @yaml_parse_file((string)$yamlFile['path']);
++            if (!is_array($data)) continue;
++            $formIds = $data['meta']['form_ids'] ?? [];
++            if (!is_array($formIds)) $formIds = [$formIds];
++            foreach ($formIds as $declaredId) {
++                if ((string)$declaredId !== $formId) continue;
++                $matches[] = $yamlFile;
++                break;
++            }
++        }
++    }
++
++    if (count($matches) === 0) {
++        return ['error' => 'Formular-YAML nicht gefunden: ' . $formId . '.yaml'];
++    }
++    if (count($matches) > 1) {
++        return ['error' => 'Mehrere Formular-YAML-Dateien fuer ' . $formId . ' gefunden.'];
++    }
++    return $matches[0];
++}
++
++/**
++ * Ermittelt die Folgeformulare, die nach dem aktuellen Formular angefordert
++ * werden sollen. Das YAML-Schema lautet:
++ *
++ * follow_up_forms:
++ *   - form: act
++ *     when:
++ *       id: asthma
++ *       equals: true
++ */
++function follow_up_forms_for_answers(
++    array $yaml,
++    array $answers,
++    string $currentFormId,
++    string $formDir,
++    int $maxFormIdLength
++): array {
++    $rules = $yaml['follow_up_forms'] ?? [];
++    if ($rules === null || $rules === []) {
++        return ['forms' => [], 'errors' => []];
++    }
++    if (!is_array($rules)) {
++        return ['forms' => [], 'errors' => ['follow_up_forms muss eine Liste sein.']];
++    }
++
++    $forms = [];
++    $errors = [];
++    $seen = [];
++
++    foreach ($rules as $index => $rule) {
++        if (!is_array($rule)) {
++            $errors[] = 'follow_up_forms[' . (string)$index . '] ist ungueltig.';
++            continue;
++        }
++
++        $condition = $rule['when'] ?? null;
++        if (!is_array($condition) || !cond_ok($answers, $condition)) continue;
++
++        $formId = trim((string)($rule['form'] ?? ''));
++        if (!preg_match('/^[a-z][a-z0-9_-]{0,3}$/', $formId)) {
++            $errors[] = 'Ungueltige Folgeformular-ID: ' . $formId;
++            continue;
++        }
++        if ($formId === $currentFormId) {
++            $errors[] = 'Folgeformular darf nicht sich selbst ausloesen: ' . $formId;
++            continue;
++        }
++        if (isset($seen[$formId])) continue;
++
++        $yamlInfo = form_yaml_for_id($formDir, $formId, $maxFormIdLength);
++        if (isset($yamlInfo['error'])) {
++            $errors[] = 'Folgeformular ' . $formId . ': ' . (string)$yamlInfo['error'];
++            continue;
++        }
++
++        $seen[$formId] = true;
++        $forms[] = [
++            'form_id' => $formId,
++            'yaml_path' => (string)$yamlInfo['path'],
++            'priority' => (int)$yamlInfo['priority'],
++        ];
++    }
++
++    usort($forms, static function (array $a, array $b): int {
++        return [$a['priority'], $a['form_id']] <=> [$b['priority'], $b['form_id']];
++    });
++
++    return ['forms' => $forms, 'errors' => $errors];
++}
++
++/**
++ * Legt Folgeauftraege als sichere Kopien der aktuellen Eingabe-GDT an.
++ * Der temporaere Dateiname wird erst nach vollstaendigem Kopieren per Hardlink
++ * sichtbar gemacht, damit tablet.php keine halbe GDT-Datei einliest.
++ */
++function create_follow_up_requests(
++    string $dirGdt,
++    string $tabletPrefix,
++    string $sourcePath,
++    string $currentFormId,
++    array $followUpForms
++): array {
++    $created = [];
++    $existing = [];
++    $errors = [];
++
++    foreach ($followUpForms as $followUp) {
++        $formId = (string)($followUp['form_id'] ?? '');
++        if ($formId === '' || $formId === $currentFormId) {
++            $errors[] = 'Ungueltiges Folgeformular: ' . $formId;
++            continue;
++        }
++
++        $name = $tabletPrefix . $formId . '-i.gdt';
++        $path = rtrim($dirGdt, '/') . '/' . $name;
++        if (is_file($path)) {
++            $existing[] = $name;
++            continue;
++        }
++
++        $tmp = @tempnam($dirGdt, '.fragebogenpi-followup-');
++        if ($tmp === false || !@copy($sourcePath, $tmp)) {
++            if ($tmp !== false) @unlink($tmp);
++            $errors[] = 'Folgeauftrag konnte nicht vorbereitet werden: ' . $name;
++            continue;
++        }
++
++        if (@link($tmp, $path)) {
++            @unlink($tmp);
++            @chmod($path, 0664);
++            $created[] = $name;
++            continue;
++        }
++
++        @unlink($tmp);
++        if (is_file($path)) {
++            $existing[] = $name;
++        } else {
++            $errors[] = 'Folgeauftrag konnte nicht angelegt werden: ' . $name;
++        }
++    }
++
++    return ['created' => $created, 'existing' => $existing, 'errors' => $errors];
++}
++
++function tablet_input_pattern(string $tabletId): string {
++    $prefix = ($tabletId === '') ? '' : preg_quote($tabletId . '-', '/');
++    return '/^' . $prefix . '([a-z][a-z0-9_-]{0,3})-i\\.gdt$/';
++}
++
++function collect_tablet_requests(string $dirGdt, string $formDir, string $tabletId, int $maxFormIdLength): array {
++    $requests = [];
++    $allRequests = [];
++    $errors = [];
++    $pattern = tablet_input_pattern($tabletId);
++
++    foreach ((array)@scandir($dirGdt) as $name) {
++        if (!is_string($name) || !preg_match($pattern, $name, $m)) continue;
++        $path = rtrim($dirGdt, '/') . '/' . $name;
++        if (!is_file($path)) continue;
++
++        $fields = parse_gdt($path);
++        $allRequests[] = [
++            'name' => $name,
++            'path' => $path,
++            'form_id' => $m[1],
++            'fields' => $fields,
++        ];
++
++        $yamlInfo = form_yaml_for_id($formDir, $m[1], $maxFormIdLength);
++        if (isset($yamlInfo['error'])) {
++            $errors[] = $name . ': ' . $yamlInfo['error'];
++            continue;
++        }
++
++        $requests[] = [
++            'name' => $name,
++            'path' => $path,
++            'form_id' => $m[1],
++            'yaml_path' => $yamlInfo['path'],
++            'priority' => $yamlInfo['priority'],
++            'fields' => $fields,
++        ];
++    }
++
++    usort($requests, static function (array $a, array $b): int {
++        return [$a['priority'], $a['name']] <=> [$b['priority'], $b['name']];
++    });
++
++    return ['requests' => $requests, 'all' => $allRequests, 'errors' => $errors];
++}
++
++function patient_identity(array $fields): array {
++    $identity = [];
++    foreach (['3000', '0193', '3101', '3102', '3103'] as $field) {
++        $value = (string)($fields[$field] ?? '');
++        $identity[$field] = $value;
++    }
++    return $identity;
++}
++
++function has_patient_identity(array $fields): bool {
++    return trim((string)($fields['3000'] ?? '')) !== ''
++        || trim((string)($fields['0193'] ?? '')) !== '';
++}
++
++function requests_have_identity_conflict(array $requests): bool {
++    if (count($requests) < 2) return false;
++    $known = [];
++    foreach ($requests as $request) {
++        foreach (patient_identity($request['fields']) as $field => $value) {
++            if ($value === '') continue;
++            if (isset($known[$field]) && $known[$field] !== $value) return true;
++            $known[$field] = $value;
++        }
++    }
++    return false;
++}
++
++function delete_request_files(array $requests): int {
++    $deleted = 0;
++    foreach ($requests as $request) {
++        $path = (string)($request['path'] ?? '');
++        if ($path !== '' && is_file($path) && @unlink($path)) $deleted++;
++    }
++    return $deleted;
++}
+--- /dev/null
++++ b/tablet-checkin.php
+@@ -0,0 +1,259 @@
++<?php
++// fragebogenpi Check-in renderer 1.8.3. Host supplies a validated view; no GDT I/O.
++if (!isset($checkinView)) { http_response_code(404); exit; }
++require_once __DIR__ . '/tablet-engine.php';
++$yaml = $checkinView['yaml'];
++$UI_TITLE = $yaml['meta']['title'] ?? 'Fragebogen';
++$APP_FOOTER = 'Praxis Check-in'; $APP_VERSION = '1.6.4 / fragebogenpi 1.8.3';
++$yamlError = $yaml['__error'] ?? '';
++$sections = (isset($yaml['sections']) && is_array($yaml['sections'])) ? $yaml['sections'] : [];
++$uiConfig = (isset($yaml['ui']) && is_array($yaml['ui'])) ? $yaml['ui'] : [];
++$showContactSection = !array_key_exists('show_contact_section', $uiConfig) || $uiConfig['show_contact_section'] !== false;
++$formHeading = ascii_only(clean_utf8_text((string)($uiConfig['heading'] ?? ''), 300));
++?>
++<!DOCTYPE html>
++<html lang="de">
++<head>
++  <meta charset="utf-8" />
++  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
++  <meta name="apple-mobile-web-app-capable" content="yes" />
++  <meta name="mobile-web-app-capable" content="yes" />
++  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
++  <meta name="apple-mobile-web-app-title" content="Praxis Check-in" />
++  <link rel="manifest" href="manifest.webmanifest">
++  <title><?php echo h(ascii_only($UI_TITLE)); ?></title>
++
++  <link rel="stylesheet" href="questionnaire.php?asset=css&v=1.6.4">
++</head>
++<body>
++  <div class="card">
++
++    <div class="completion-notice"><b>Anmeldung abgeschlossen</b><p><?php echo h($checkinView['message']); ?></p></div>
++    <h1><?php echo h($UI_TITLE); ?></h1>
++    <p class="sub">Bitte beantworten Sie die Fragen. Größe und Gewicht sind freiwillig; Pflichtfragen sind gekennzeichnet.</p>
++    <form id="anamForm" autocomplete="off" data-timeout="<?php echo (int) $checkinView['timeout']; ?>">
++      <?php foreach (['flowId', 'formToken', 'csrf'] as $tokenField) { ?>
++      <input type="hidden" name="<?php echo h($tokenField); ?>" value="<?php echo h($checkinView[$tokenField]); ?>">
++      <?php } ?>
++
++      <?php if ($showContactSection) { ?>
++      <div class="section">
++        <h2>Größe und Gewicht</h2>
++        <div class="row">
++          <div class="field">
++            <label for="height_cm">Koerpergroesse (cm)</label>
++            <input id="height_cm" name="height_cm" inputmode="numeric" placeholder="z. B. 180" />
++          </div>
++          <div class="field">
++            <label for="weight_kg">Koerpergewicht (kg)</label>
++            <input id="weight_kg" name="weight_kg" inputmode="decimal" placeholder="z. B. 82,5" />
++          </div>
++        </div>
++
++      </div>
++      <?php } ?>
++
++      <?php if ($formHeading !== '') { ?>
++        <h1 class="formHeading"><?php echo h($formHeading); ?></h1>
++      <?php } ?>
++
++      <?php foreach ($sections as $secIdx => $sec) {
++        if (!is_array($sec)) continue;
++        if (array_key_exists('ui_output', $sec) && $sec['ui_output'] === false) continue;
++        $title = (string)($sec['title'] ?? '');
++        if ($title === '') continue;
++        $type  = (string)($sec['type'] ?? '');
++        $questions = $sec['questions'] ?? [];
++        if (!is_array($questions)) $questions = [];
++
++        $secShow = $sec['show_if'] ?? null;
++        $secAttr = '';
++        if (is_array($secShow) && isset($secShow['id'])) {
++            $secAttr = ' data-show-id="' . h((string)$secShow['id']) . '"';
++            if (array_key_exists('equals', $secShow)) {
++                $secAttr .= ' data-show-op="equals" data-show-val="' . h((string)$secShow['equals']) . '"';
++            } elseif (array_key_exists('not_equals', $secShow)) {
++                $secAttr .= ' data-show-op="not_equals" data-show-val="' . h((string)$secShow['not_equals']) . '"';
++            } elseif (array_key_exists('in', $secShow)) {
++                $secAttr .= ' data-show-op="in" data-show-val="' . h(json_encode(array_values((array)$secShow['in']), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '"';
++            } elseif (array_key_exists('any_selected_except', $secShow)) {
++                $secAttr .= ' data-show-op="any_selected_except" data-show-val="' . h((string)$secShow['any_selected_except']) . '"';
++            }
++        }
++      ?>
++        <div class="section" data-section="<?php echo h((string)$secIdx); ?>"<?php echo $secAttr; ?>>
++          <h2><?php echo h(ascii_only($title)); ?></h2>
++
++          <?php if ($type === 'checklist') { ?>
++            <div class="checkgrid">
++              <?php foreach ($questions as $q) {
++                if (!is_array($q)) continue;
++
++                $qType = (string)($q['type'] ?? '');
++                $label = (string)($q['label'] ?? '');
++
++                if ($qType === 'header') {
++                  if ($label !== '') echo '<div class="checkHeader">'.h(ascii_only($label)).'</div>';
++                  continue;
++                }
++
++                $id = (string)($q['id'] ?? '');
++                if ($id === '' || $label === '') continue;
++              ?>
++                <label class="check" data-qwrap="1" data-qid="<?php echo h($id); ?>" data-qtype="<?php echo h($qType); ?>" data-required="<?php echo !empty($q['required']) ? '1' : '0'; ?>" data-qlabel="<?php echo h(ascii_only($label)); ?>">
++                  <input type="checkbox" name="q[<?php echo h($id); ?>]" value="1" />
++                  <span><?php echo h(ascii_only($label)); ?></span>
++                </label>
++              <?php } ?>
++            </div>
++          <?php } else { ?>
++            <?php foreach ($questions as $q) {
++              if (!is_array($q)) continue;
++              $id = (string)($q['id'] ?? '');
++              $label = (string)($q['label'] ?? '');
++              $qType = (string)($q['type'] ?? '');
++              $opts = $q['options'] ?? [];
++              $isRequired = !empty($q['required']);
++              if ($id === '' || $label === '') continue;
++
++              $show = $q['show_if'] ?? null;
++              $wrapAttr = '';
++              if (is_array($show) && isset($show['id'])) {
++                  $wrapAttr = ' data-show-id="' . h((string)$show['id']) . '"';
++                  if (array_key_exists('equals', $show)) {
++                      $wrapAttr .= ' data-show-op="equals" data-show-val="' . h((string)$show['equals']) . '"';
++                  } elseif (array_key_exists('not_equals', $show)) {
++                      $wrapAttr .= ' data-show-op="not_equals" data-show-val="' . h((string)$show['not_equals']) . '"';
++                  } elseif (array_key_exists('in', $show)) {
++                      $wrapAttr .= ' data-show-op="in" data-show-val="' . h(json_encode(array_values((array)$show['in']), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) . '"';
++                  } elseif (array_key_exists('any_selected_except', $show)) {
++                      $wrapAttr .= ' data-show-op="any_selected_except" data-show-val="' . h((string)$show['any_selected_except']) . '"';
++                  }
++              }
++
++              if ($qType === 'derived') {
++                  echo '<div class="field hidden" data-qwrap="1" data-qid="'.h($id).'"'.$wrapAttr.'></div>';
++                  continue;
++              }
++            ?>
++              <div class="field<?php echo $qType === 'scale' ? ' scaleQuestion' : ''; ?>" data-qwrap="1" data-qid="<?php echo h($id); ?>" data-qtype="<?php echo h($qType); ?>" data-required="<?php echo $isRequired ? '1' : '0'; ?>" data-qlabel="<?php echo h(ascii_only($label)); ?>"<?php echo $wrapAttr; ?>>
++
++              <?php if ($qType === 'scale') {
++                  $scale = (isset($q['scale']) && is_array($q['scale'])) ? $q['scale'] : [];
++                  $scaleMin = isset($scale['minimum']) && is_numeric($scale['minimum']) ? (float)$scale['minimum'] : 0.0;
++                  $scaleMax = isset($scale['maximum']) && is_numeric($scale['maximum']) ? (float)$scale['maximum'] : 10.0;
++                  $scaleStep = isset($scale['step']) && is_numeric($scale['step']) && (float)$scale['step'] > 0 ? (float)$scale['step'] : 1.0;
++                  $scaleInitial = $scaleMin + round((($scaleMax - $scaleMin) / 2) / $scaleStep) * $scaleStep;
++                  $scaleLeft = (string)($scale['left_label'] ?? numeric_text($scaleMin));
++                  $scaleRight = (string)($scale['right_label'] ?? numeric_text($scaleMax));
++                  $tickCount = (int)floor(($scaleMax - $scaleMin) / $scaleStep) + 1;
++                  if ($tickCount < 2 || $tickCount > 21) $tickCount = 0;
++              ?>
++                  <label for="<?php echo h('scale_'.$id); ?>">
++                    <?php echo h(ascii_only($label)); ?>
++                    <?php if ($isRequired) { ?><span class="requiredHint">(Pflichtfeld)</span><?php } ?>
++                  </label>
++                  <input type="hidden" id="<?php echo h('q_'.$id); ?>" name="q[<?php echo h($id); ?>]" value="" />
++                  <div class="scaleValue" data-scale-value="1" aria-live="polite">Bitte auswaehlen</div>
++                  <div class="scaleEndpoints">
++                    <span><b><?php echo h(numeric_text($scaleMin)); ?></b> – <?php echo h(ascii_only($scaleLeft)); ?></span>
++                    <span><b><?php echo h(numeric_text($scaleMax)); ?></b> – <?php echo h(ascii_only($scaleRight)); ?></span>
++                  </div>
++                  <input
++                    id="<?php echo h('scale_'.$id); ?>"
++                    class="scaleRange"
++                    type="range"
++                    min="<?php echo h(numeric_text($scaleMin)); ?>"
++                    max="<?php echo h(numeric_text($scaleMax)); ?>"
++                    step="<?php echo h(numeric_text($scaleStep)); ?>"
++                    value="<?php echo h(numeric_text($scaleInitial)); ?>"
++                    data-scale-range="1"
++                    data-answer-target="<?php echo h('q_'.$id); ?>"
++                    aria-label="<?php echo h(ascii_only($label)); ?>"
++                    aria-valuetext="Bitte auswaehlen"
++                  />
++                  <?php if ($tickCount > 0) { ?>
++                    <div class="scaleTicks" role="group" aria-label="Wert direkt auswaehlen">
++                      <?php for ($tick = 0; $tick < $tickCount; $tick++) { ?>
++                        <?php $tickValue = numeric_text($scaleMin + $tick * $scaleStep); ?>
++                        <button
++                          type="button"
++                          class="scaleTick"
++                          data-scale-tick="1"
++                          data-range-target="<?php echo h('scale_'.$id); ?>"
++                          data-scale-value-option="<?php echo h($tickValue); ?>"
++                          aria-label="<?php echo h(ascii_only($label) . ': ' . $tickValue); ?>"
++                          aria-pressed="false"
++                        ><?php echo h($tickValue); ?></button>
++                      <?php } ?>
++                    </div>
++                  <?php } ?>
++              <?php } elseif ($qType === 'yesno') { ?>
++                  <label><?php echo h(ascii_only($label)); ?></label>
++                  <div class="radioRow">
++                    <label class="radioPill">
++                      <input type="radio" name="q[<?php echo h($id); ?>]" value="yes" />
++                      <span>Ja</span>
++                    </label>
++                    <label class="radioPill">
++                      <input type="radio" name="q[<?php echo h($id); ?>]" value="no" />
++                      <span>Nein</span>
++                    </label>
++                  </div>
++              <?php } elseif ($qType === 'choice' && is_array($opts)) { ?>
++                  <label><?php echo h(ascii_only($label)); ?></label>
++                  <div class="radioRow">
++                    <?php foreach ($opts as $opt) {
++                      $opt = (string)$opt;
++                      if ($opt === '') continue;
++                    ?>
++                      <label class="radioPill">
++                        <input type="radio" name="q[<?php echo h($id); ?>]" value="<?php echo h(ascii_only($opt)); ?>" />
++                        <span><?php echo h(ascii_only($opt)); ?></span>
++                      </label>
++                    <?php } ?>
++                  </div>
++              <?php } elseif ($qType === 'multiselect' && is_array($opts)) { ?>
++                  <label><?php echo h(ascii_only($label)); ?></label>
++                  <div class="checkgrid">
++                    <?php foreach ($opts as $opt) {
++                      $opt = (string)$opt;
++                      if ($opt === '') continue;
++                    ?>
++                      <label class="check">
++                        <input type="checkbox" name="q[<?php echo h($id); ?>][]" value="<?php echo h(ascii_only($opt)); ?>" />
++                        <span><?php echo h(ascii_only($opt)); ?></span>
++                      </label>
++                    <?php } ?>
++                  </div>
++              <?php } elseif ($qType === 'number') { ?>
++                  <label for="<?php echo h('q_'.$id); ?>"><?php echo h(ascii_only($label)); ?></label>
++                  <input id="<?php echo h('q_'.$id); ?>" name="q[<?php echo h($id); ?>]" inputmode="numeric" />
++              <?php } else { ?>
++                  <label for="<?php echo h('q_'.$id); ?>"><?php echo h(ascii_only($label)); ?></label>
++                  <?php $ml = !empty($q['multiline']); ?>
++                  <?php if ($ml) { ?>
++                    <textarea id="<?php echo h('q_'.$id); ?>" name="q[<?php echo h($id); ?>]" maxlength="600"></textarea>
++                  <?php } else { ?>
++                    <input id="<?php echo h('q_'.$id); ?>" name="q[<?php echo h($id); ?>]" maxlength="600" />
++                  <?php } ?>
++              <?php } ?>
++
++              </div>
++            <?php } ?>
++          <?php } ?>
++
++        </div>
++      <?php } ?>
++
++      <button id="submitBtn" type="button">Angaben speichern und weiter</button>
++      <button id="abortBtn" type="button">Fragebögen überspringen</button>
++
++      <div id="status" role="alert"></div>
++      <div class="footer"><?php echo h(ascii_only($APP_FOOTER . ' · ' . $APP_VERSION)); ?></div>
++    </form>
++  </div>
++
++  <script src="questionnaire.php?asset=js&v=1.6.4" defer></script>
++</body>
++</html>
+--- /dev/null
++++ b/tablet-checkin.js
+@@ -0,0 +1,297 @@
++'use strict';
++(() => {
++    var submitBtn = document.getElementById("submitBtn");
++    var abortBtn  = document.getElementById("abortBtn");
++    var statusEl  = document.getElementById("status");
++    var formEl    = document.getElementById("anamForm");
++
++    function setStatus(msg, isError) {
++      statusEl.textContent = msg || "";
++      statusEl.style.color = isError ? "#d00" : "#333";
++    }
++
++    function questionWrapForId(qid) {
++      var wraps = formEl.querySelectorAll('[data-qwrap="1"]');
++      for (var i = 0; i < wraps.length; i++) {
++        if ((wraps[i].getAttribute('data-qid') || '') === qid) return wraps[i];
++      }
++      return null;
++    }
++
++    function getAnswerValue(qid) {
++      var wrap = questionWrapForId(qid);
++      if (!wrap) return "";
++
++      var cbs = wrap.querySelectorAll('input[type="checkbox"]');
++      if (cbs && cbs.length === 1 && (cbs[0].name || '').slice(-2) !== '[]') {
++        return cbs[0].checked ? true : false;
++      }
++      if (cbs && cbs.length) {
++        var vals = [];
++        cbs.forEach(function(x){ if (x.checked) vals.push(x.value || ""); });
++        return vals;
++      }
++
++      var r = wrap.querySelector('input[type="radio"]:checked');
++      if (r) return r.value;
++
++      var t = wrap.querySelector('input[type="hidden"], input:not([type]), input[type="text"], input[type="number"], textarea, select');
++      if (t) return (t.value || "");
++      return "";
++    }
++
++    function commitScale(range) {
++      var targetId = range.getAttribute("data-answer-target");
++      var target = targetId ? document.getElementById(targetId) : null;
++      var wrap = range.closest('[data-qwrap="1"]');
++      if (!target || !wrap) return;
++      target.value = range.value;
++      range.setAttribute("aria-valuetext", range.value);
++      var valueEl = wrap.querySelector('[data-scale-value="1"]');
++      if (valueEl) valueEl.textContent = range.value;
++      wrap.querySelectorAll('[data-scale-tick="1"]').forEach(function(tick){
++        var selected = String(tick.getAttribute('data-scale-value-option')) === String(range.value);
++        tick.classList.toggle('selected', selected);
++        tick.setAttribute('aria-pressed', selected ? 'true' : 'false');
++      });
++      wrap.classList.add("answered");
++      wrap.classList.remove("invalid");
++    }
++
++    function setScaleFromPointer(range, event) {
++      if (typeof event.clientX !== 'number') return;
++      if (typeof event.button === 'number' && event.button !== 0) return;
++      var rect = range.getBoundingClientRect();
++      if (!rect || rect.width <= 0) return;
++
++      var minimum = Number(range.min || 0);
++      var maximum = Number(range.max || 100);
++      var step = Number(range.step || 1);
++      if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || !Number.isFinite(step) || step <= 0 || maximum <= minimum) return;
++
++      var ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
++      var rawValue = minimum + ratio * (maximum - minimum);
++      var snappedValue = minimum + Math.round((rawValue - minimum) / step) * step;
++      snappedValue = Math.max(minimum, Math.min(maximum, snappedValue));
++      range.value = String(Number(snappedValue.toFixed(6)));
++      commitScale(range);
++    }
++
++    formEl.querySelectorAll('[data-scale-range="1"]').forEach(function(range){
++      range.addEventListener("pointerdown", function(event){ setScaleFromPointer(range, event); });
++      range.addEventListener("input", function(){ commitScale(range); });
++      range.addEventListener("change", function(){ commitScale(range); });
++      range.addEventListener("click", function(event){ setScaleFromPointer(range, event); });
++    });
++
++    formEl.querySelectorAll('[data-scale-tick="1"]').forEach(function(tick){
++      tick.addEventListener("click", function(){
++        var rangeId = tick.getAttribute("data-range-target");
++        var range = rangeId ? document.getElementById(rangeId) : null;
++        if (!range) return;
++        range.value = tick.getAttribute("data-scale-value-option") || range.value;
++        commitScale(range);
++        range.focus();
++      });
++    });
++
++    var requiredValidationActive = false;
++
++    function updateRequiredQuestionMarks() {
++      var firstInvalid = null;
++      var missingLabels = [];
++      var required = formEl.querySelectorAll('[data-qwrap="1"][data-required="1"]');
++
++      if (!requiredValidationActive) {
++        required.forEach(function(wrap){ wrap.classList.remove('invalid'); });
++        return { firstInvalid:null, missingLabels:[] };
++      }
++
++      required.forEach(function(wrap){
++        var section = wrap.closest('.section');
++        var hidden = wrap.classList.contains('hidden') || (section && section.classList.contains('hidden'));
++        if (hidden) {
++          wrap.classList.remove('invalid');
++          return;
++        }
++
++        var qid = wrap.getAttribute('data-qid') || '';
++        var value = getAnswerValue(qid);
++        var answered = Array.isArray(value) ? value.length > 0 : (value === true || String(value || '').trim() !== '');
++        wrap.classList.toggle('invalid', !answered);
++        if (!answered) {
++          if (!firstInvalid) firstInvalid = wrap;
++          missingLabels.push(wrap.getAttribute('data-qlabel') || qid);
++        }
++      });
++
++      return { firstInvalid:firstInvalid, missingLabels:missingLabels };
++    }
++
++    function requiredQuestionsValid() {
++      requiredValidationActive = true;
++      var state = updateRequiredQuestionMarks();
++
++      if (state.firstInvalid) {
++        state.firstInvalid.scrollIntoView({ behavior:"smooth", block:"center" });
++        setStatus("Bitte alle Pflichtfragen beantworten. Erste offene Frage: " + state.missingLabels[0], true);
++        return false;
++      }
++      return true;
++    }
++
++    function parseJsonArrayMaybe(s) {
++      if (!s) return null;
++      try { var v = JSON.parse(s); if (Array.isArray(v)) return v; } catch(e) {}
++      return null;
++    }
++
++    function applyShowIf() {
++      var nodes = formEl.querySelectorAll('[data-qwrap="1"][data-show-id]');
++      nodes.forEach(function(el){
++        var depId = el.getAttribute('data-show-id');
++        var op = el.getAttribute('data-show-op') || 'equals';
++        var val = el.getAttribute('data-show-val');
++
++        var cur = getAnswerValue(depId);
++        var show = true;
++
++        if (op === 'equals') show = (String(cur) === String(val));
++        else if (op === 'not_equals') show = (String(cur) !== String(val));
++        else if (op === 'in') {
++          var lst = parseJsonArrayMaybe(val) || [];
++          show = (lst.map(String).indexOf(String(cur)) !== -1);
++        } else if (op === 'any_selected_except') {
++          var except = String(val || "");
++          show = false;
++          if (Array.isArray(cur)) {
++            for (var i=0;i<cur.length;i++){
++              var x = String(cur[i] || "");
++              if (!x) continue;
++              if (!except) { show = true; break; }
++              if (x !== except) { show = true; break; }
++            }
++          }
++        }
++
++        el.classList.toggle('hidden', !show);
++      });
++
++      var secs = formEl.querySelectorAll('.section[data-show-id]');
++      secs.forEach(function(el){
++        var depId = el.getAttribute('data-show-id');
++        var op = el.getAttribute('data-show-op') || 'equals';
++        var val = el.getAttribute('data-show-val');
++
++        var cur = getAnswerValue(depId);
++        var show = true;
++
++        if (op === 'equals') show = (String(cur) === String(val));
++        else if (op === 'not_equals') show = (String(cur) !== String(val));
++        else if (op === 'in') {
++          var lst = parseJsonArrayMaybe(val) || [];
++          show = (lst.map(String).indexOf(String(cur)) !== -1);
++        } else if (op === 'any_selected_except') {
++          var except = String(val || "");
++          show = false;
++          if (Array.isArray(cur)) {
++            for (var i=0;i<cur.length;i++){
++              var x = String(cur[i] || "");
++              if (!x) continue;
++              if (!except) { show = true; break; }
++              if (x !== except) { show = true; break; }
++            }
++          }
++        }
++
++        el.classList.toggle('hidden', !show);
++      });
++    }
++
++    formEl.addEventListener('change', applyShowIf);
++    formEl.addEventListener('input', applyShowIf);
++    formEl.addEventListener('change', updateRequiredQuestionMarks);
++    formEl.addEventListener('input', updateRequiredQuestionMarks);
++    applyShowIf();
++    updateRequiredQuestionMarks();
++
++
++    const POST_URL = 'questionnaire.php';
++    let sending = false, idleTimer = null, lastTouch = 0, touching = false;
++    const timeout = Number(formEl.dataset.timeout) * 1000;
++    function clearAnswers() {
++      formEl.reset();
++      formEl.querySelectorAll('input:not([type=hidden]),textarea').forEach(x => {
++        if (x.type === 'radio' || x.type === 'checkbox') x.checked = false;
++        else x.value = '';
++      });
++    }
++    function leave() { clearAnswers(); location.replace('./'); }
++    function tokens(action) {
++      const data = new FormData();
++      for (const key of ['flowId', 'formToken', 'csrf']) data.append(key, formEl.elements[key].value);
++      data.append('action', action); return data;
++    }
++    async function post(data) {
++      const response = await fetch(POST_URL, {method:'POST', body:data, cache:'no-store', credentials:'same-origin', redirect:'error'});
++      const result = await response.json();
++      return {response, result};
++    }
++    async function submit(action) {
++      if (sending || (action === 'form_submit' && !requiredQuestionsValid())) return;
++      const data = action === 'form_submit' ? new FormData(formEl) : tokens(action);
++      data.set('action', action);
++      sending = true; clearTimeout(idleTimer);
++      formEl.querySelectorAll('button,input,textarea').forEach(x => x.disabled = true);
++      setStatus('Ihre Angaben werden übertragen …', false);
++      try {
++        const {response, result} = await post(data);
++        if (response.ok && result.ok) {
++          clearAnswers();
++          location.replace(result.more === true ? 'questionnaire.php' : './');
++        } else if (result.code === 'FORM_INPUT' && !result.blocked) {
++          formEl.querySelectorAll('button,input,textarea').forEach(x => x.disabled = false);
++          sending = false; setStatus(result.message, true); armIdle();
++          statusEl.scrollIntoView({block:'center'});
++        } else { leave(); }
++      } catch (_) {
++        // A lost response may hide a successful write. Reconcile at the main page; NEVER resend.
++        leave();
++      }
++    }
++    function armIdle() {
++      clearTimeout(idleTimer);
++      idleTimer = setTimeout(async () => {
++        if (sending) return;
++        sending = true; clearAnswers();
++        try { await post(tokens('form_timeout')); } catch (_) {}
++        leave();
++      }, timeout);
++    }
++    function activity() {
++      if (sending) return;
++      armIdle();
++      if (touching || Date.now() - lastTouch < 20000) return;
++      lastTouch = Date.now(); touching = true;
++      post(tokens('form_touch')).then(({response,result}) => {
++        if ((!response.ok || !result.ok) && !sending) leave();
++      }).catch(() => { if (!sending) leave(); }).finally(() => { touching = false; });
++    }
++    formEl.addEventListener('submit', event => { event.preventDefault(); submit('form_submit'); });
++    submitBtn.addEventListener('click', () => submit('form_submit'));
++    abortBtn.addEventListener('click', () => {
++      if (confirm('Fragebögen überspringen? Ihre Anmeldung bleibt bestehen. Noch nicht gesendete Antworten werden verworfen.')) submit('form_abort');
++    });
++    document.addEventListener('pointerdown', activity, {passive:true});
++    document.addEventListener('input', activity, {passive:true});
++    document.addEventListener('keydown', activity, {passive:true});
++    // Never restore a previous patient's answers from Safari's back-forward cache.
++    window.addEventListener('pagehide', clearAnswers);
++    window.addEventListener('pageshow', event => { if (event.persisted) leave(); });
++    document.addEventListener('visibilitychange', () => {
++      if (document.hidden && !sending) { clearAnswers(); }
++      else if (!sending) location.replace('./');
++    });
++    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
++    window.scrollTo(0,0); armIdle();
++})();
+--- /dev/null
++++ b/tablet-checkin.css
+@@ -0,0 +1,162 @@
++    :root { --maxw: 780px; }
++    /* mehr Abstand oben (safe-area) fuer WebApp */
++    body {
++      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
++      background:#f2f2f7;
++      margin:0;
++      padding: calc(20px + env(safe-area-inset-top, 0px)) 20px 20px 20px;
++    }
++    .card { background:#fff; border-radius:14px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,0.06); margin:0 auto; max-width:var(--maxw); }
++    .patient { font-size: 2.0rem; font-weight: 900; margin: 0 0 6px 0; }
++    .sub { color:#444; margin:0 0 12px 0; line-height:1.35; }
++    .row { display:flex; gap:10px; flex-wrap:wrap; }
++    .field { flex:1 1 220px; text-align:left; margin: 8px 0; }
++    label { display:block; font-size:0.95rem; font-weight:700; margin-bottom:6px; color:#222; }
++    input, textarea { width:100%; box-sizing:border-box; padding:10px 12px; border-radius:10px; border:1px solid #ddd; font-size:1rem; }
++    textarea { min-height: 88px; resize: vertical; }
++
++    .section { margin-top: 16px; padding-top: 8px; border-top: 1px solid #eee; }
++    .section h2 { font-size: 1.2rem; margin: 10px 0 6px 0; }
++    .formHeading { font-size:1.45rem; line-height:1.25; margin:18px 0 10px; text-align:center; }
++
++    .checkgrid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:10px; }
++    .check { display:flex; align-items:center; gap:10px; background:#fafafa; border:1px solid #eee; border-radius:12px; padding:10px 12px; }
++    .check input { width:22px; height:22px; flex:0 0 auto; }
++    .check span { font-size:1.05rem; overflow-wrap:anywhere; }
++
++    .checkHeader{
++      grid-column: 1 / -1;
++      padding: 8px 10px 0 6px;
++      margin-top: 4px;
++      font-weight: 900;
++      font-size: 1.05rem;
++      color:#222;
++    }
++
++    .radioRow{
++      display:grid;
++      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
++      gap:10px;
++    }
++    .radioPill{
++      display:flex;
++      align-items:center;
++      justify-content:center;
++      gap:10px;
++      background:#fafafa;
++      border:1px solid #eee;
++      border-radius:12px;
++      padding:12px 12px;
++      min-height:44px;
++      box-sizing:border-box;
++    }
++    .radioPill input{ width:22px; height:22px; flex:0 0 auto; }
++    .radioPill span{ white-space:normal; overflow-wrap:anywhere; text-align:center; }
++
++    .scaleQuestion{
++      flex:1 1 100%;
++      background:#fafafa;
++      border:1px solid #e5e5ea;
++      border-radius:14px;
++      padding:14px 16px 12px 16px;
++      box-sizing:border-box;
++      margin:10px 0;
++    }
++    .scaleQuestion.invalid{ border-color:#ff3b30; background:#fff3f2; }
++    .field.invalid{
++      background:#fff3f2;
++      border-radius:12px;
++      box-shadow:0 0 0 2px #ff3b30;
++      padding:10px;
++      box-sizing:border-box;
++    }
++    .field.invalid > label{ color:#d70015; }
++    .field.invalid .radioRow{ outline:2px solid #ff3b30; outline-offset:3px; border-radius:12px; }
++    .field.invalid input:not([type="radio"]):not([type="range"]):not([type="hidden"]),
++    .field.invalid textarea,
++    .field.invalid select{ border-color:#ff3b30; outline:1px solid #ff3b30; }
++    .check.invalid{ border-color:#ff3b30; outline:1px solid #ff3b30; background:#fff3f2; color:#d70015; }
++    .scaleValue{
++      display:table;
++      min-width:42px;
++      margin:4px auto 8px auto;
++      padding:5px 12px;
++      border-radius:999px;
++      background:#e5e5ea;
++      color:#555;
++      text-align:center;
++      font-size:1.05rem;
++      font-weight:900;
++    }
++    .scaleQuestion.answered .scaleValue{ background:#007aff; color:#fff; }
++    .scaleEndpoints{
++      display:grid;
++      grid-template-columns:minmax(0, 1fr) minmax(0, 1fr);
++      gap:18px;
++      align-items:end;
++      font-size:0.92rem;
++      line-height:1.25;
++      color:#333;
++    }
++    .scaleEndpoints span:last-child{ text-align:right; }
++    .scaleRange{
++      width:100%;
++      margin:14px 0 2px 0;
++      padding:0;
++      border:0;
++      accent-color:#007aff;
++      opacity:0.45;
++    }
++    .scaleQuestion.answered .scaleRange{ opacity:1; }
++    .scaleTicks{
++      display:flex;
++      justify-content:space-between;
++      padding:0;
++      color:#666;
++      font-size:0.82rem;
++      font-variant-numeric:tabular-nums;
++    }
++    button.scaleTick{
++      width:auto;
++      min-width:30px;
++      min-height:30px;
++      margin:0;
++      padding:3px 8px;
++      border-radius:8px;
++      background:transparent;
++      color:#666;
++      font-size:0.82rem;
++      line-height:1;
++    }
++    button.scaleTick.selected{ background:#007aff; color:#fff; }
++    button.scaleTick:focus-visible{ outline:2px solid #007aff; outline-offset:2px; }
++    .requiredHint{ color:#777; font-size:0.8rem; font-weight:600; }
++
++    button { font-size: 1.05rem; padding: 14px 18px; border-radius: 12px; border: none; width: 100%; margin: 10px 0; cursor: pointer; }
++    #submitBtn { background: #34c759; color:#fff; }
++    #abortBtn { background: #ff3b30; color:#fff; }
++    #submitBtn:disabled { background: #a7e3b7; cursor: not-allowed; }
++
++    #status { font-size: 1.05rem; font-weight: 700; color: #333; margin-top: 10px; min-height: 1.4em; word-break: break-word; }
++    .footer { margin-top: 14px; font-size: 0.8rem; color: #777; text-align:center; }
++    .warn { background:#fff7e6; border:1px solid #ffe0a6; padding:12px; border-radius:12px; margin:10px 0; color:#6b4b00; }
++
++    .hidden { display:none !important; }
++
++/* Check-in iPad landscape skin; questionnaire definitions and score logic remain upstream. */
++:root{--maxw:1020px;color:#183c37;font-size:24px}
++body{background:#f5f7f4;padding:24px max(28px,env(safe-area-inset-left))}
++.card{padding:28px;border-radius:24px;box-shadow:none}
++h1{font-size:1.6rem;line-height:1.2}p{line-height:1.4}
++label{font-size:1rem;line-height:1.4}.field{margin:14px 0}
++input,textarea{min-height:64px;border:2px solid #d8e2da;border-radius:14px;font-size:1rem}
++.check,.radioPill{min-height:72px;padding:14px;border:2px solid #d8e2da}
++.check input,.radioPill input{width:28px;height:28px;min-height:28px;accent-color:#19695b}
++.section{margin-top:28px;padding-top:18px}.section h2{font-size:1.2rem}
++button{min-height:76px;font-size:1.1rem;touch-action:manipulation}
++#submitBtn{background:#19695b}#abortBtn{background:#e3eee7;color:#183c37}
++button.scaleTick{min-width:44px;min-height:48px}
++.scaleRange{min-height:48px;accent-color:#19695b}
++.completion-notice{padding:20px;border-radius:20px;background:#e3eee7;text-align:center}
++.completion-notice p{margin-bottom:0}.footer{font-size:.7rem}.requiredHint{font-size:.75rem}
++:focus-visible{outline:4px solid #c38935;outline-offset:3px}
+--- a/bootstrap
++++ b/bootstrap
+@@ -2,4 +2,8 @@
+ befund.php
+ anamnesebogen.php
+ anamnesebogen.yaml
++tablet-engine.php
+ tablet.php
++tablet-checkin.php
++tablet-checkin.js
++tablet-checkin.css
+--- a/fragebogenpi.sh
++++ b/fragebogenpi.sh
+@@ -4,13 +4,17 @@
+ # Projekt: fragebogenpi
+ # Autor: Thomas Kienzle
+ #
+-# Version: 1.7.0
++# Version: 1.7.1
+ #
+ # =========================
+ # Changelog (vollständig)
+ # =========================
+ #
++# - 1.7.1 (2026-09-13)
++#   * Gemeinsame Tablet-Engine für GDT und Check-in.
++#   * Tablet-Einzelupdate lädt und prüft beide PHP-Dateien vor Aktivierung.
++#
+ # - 1.7.0 (2026-07-18)
+ #   * Tablet-Formularbetrieb unterstützt bedingte Folgeformulare aus YAML.
+ #   * tablet.php legt Folgeaufträge als neue -i.gdt im bestehenden GDT-Ordner an.
+ #
+@@ -349,4 +353,4 @@
+-VERSION="1.7.0"
++VERSION="1.7.1"
+ STEP_NO=0
+ 
+ banner() {
+@@ -2129,12 +2133,20 @@
+-  local base_url tmp dst
++  local base_url tmp tmp_engine dst
+   base_url="$(echo "$BOOTSTRAP_URL" | sed 's#^\(.*\)/[^/]*$#\1#')"
+   dst="${WEBROOT}/tablet.php"
+   tmp="$(mktemp)"
+-  trap 'rm -f "$tmp"; trap - RETURN' RETURN
++  tmp_engine="$(mktemp)"
++  trap 'rm -f "$tmp" "$tmp_engine"; trap - RETURN' RETURN
+ 
++  curl -fsSL "${base_url}/tablet-engine.php" -o "$tmp_engine" || die "Download fehlgeschlagen: tablet-engine.php"
+   curl -fsSL "${base_url}/tablet.php" -o "$tmp" || die "Download fehlgeschlagen: tablet.php"
++  php -l "$tmp_engine" >/dev/null || die "PHP-Syntaxfehler: tablet-engine.php"
++  php -l "$tmp" >/dev/null || die "PHP-Syntaxfehler: tablet.php"
+   mkdir -p "$WEBROOT"
++  backup_file "${WEBROOT}/tablet-engine.php"
+   backup_file "$dst"
++  mv "$tmp_engine" "${WEBROOT}/tablet-engine.php"
+   mv "$tmp" "$dst"
++  chown www-data:www-data "${WEBROOT}/tablet-engine.php" || true
++  chmod 0644 "${WEBROOT}/tablet-engine.php"
+   chown www-data:www-data "$dst" || true
+   chmod 0644 "$dst"
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -26,7 +26,7 @@
+ Die derzeit bestaetigten Basisversionen sind:
+ 
+ ```text
+-fragebogenpi.sh v1.7.0
++fragebogenpi.sh v1.7.1
+ wartezimmer.sh v1.6
+ ```
+ 
