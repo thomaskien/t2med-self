@@ -31,6 +31,84 @@ Im gezeigten Aufbau wurden die beiliegenden Kunststoffblenden aus optischen Grü
 
 <a href="fotos/IMG_4405.jpeg"><img src="fotos/IMG_4405.jpeg" width="560" alt="Geöffnetes Stahlgehäuse mit iPad, Ladekabel und Schaumpolstern oberhalb und unterhalb des Geräts"></a>
 
+## Bildergeschichte: Vom Einlesen bis zum Abschluss
+
+So sieht ein vollständiger Beispielablauf am Terminal aus. Je nach Termin, vorhandenen Angaben und Einwilligungen entfallen einzelne Schritte. Alle Bilder lassen sich durch Anklicken vergrößern.
+
+[Direkt zur Einrichtung](#einrichtung)
+
+### 1. Gesundheitskarte einstecken
+
+Der Patient steckt seine Gesundheitskarte in das Lesegerät und tippt auf **„Karte einlesen“**.
+
+<a href="fotos/IMG_4390.jpeg"><img src="fotos/IMG_4390.jpeg" width="640" alt="Schritt 1: Startbildschirm mit der Schaltfläche Karte einlesen"></a>
+
+### 2. Die Karte wird eingelesen
+
+Das Terminal liest die Karte und ruft die für die Anmeldung benötigten Angaben aus t2med ab. Währenddessen bittet es um einen Moment Geduld.
+
+<a href="fotos/IMG_4391.jpeg"><img src="fotos/IMG_4391.jpeg" width="640" alt="Schritt 2: Warteanzeige während des Einlesens der Gesundheitskarte"></a>
+
+### 3. Kontaktdaten prüfen
+
+Stimmen Telefonnummern, E-Mail und die Adresse auf der Karte noch? Der Patient kann Angaben ergänzen oder korrigieren. Alle Angaben sind freiwillig; leere Felder lassen vorhandene Werte unverändert. Eine abweichende Adresse wird als Hinweis für das Praxisteam festgehalten.
+
+<a href="fotos/IMG_4392.jpeg"><img src="fotos/IMG_4392.jpeg" width="640" alt="Schritt 3: Kontaktdaten und Kartenadresse prüfen"></a>
+
+### 4. Eine Telefonnummer ergänzen
+
+Für Telefonnummern öffnet sich eine große Zifferntastatur. Der Patient gibt die vollständige neue Nummer ein und bestätigt mit **„Fertig“**.
+
+<a href="fotos/IMG_4393.jpeg"><img src="fotos/IMG_4393.jpeg" width="640" alt="Schritt 4: Telefonnummer über die Zifferntastatur eingeben"></a>
+
+### 5. Das Anliegen auswählen
+
+Falls im jeweiligen Ablauf vorgesehen, fragt das Terminal nach dem Besuchsgrund: ein akutes Problem, nur die Karte einlesen oder ein anderes Anliegen. Termin und Auswahl bestimmen den weiteren Weg.
+
+<a href="fotos/IMG_4394.jpeg"><img src="fotos/IMG_4394.jpeg" width="640" alt="Schritt 5: Auswahl zwischen akutem Problem, Kartenlesen und anderem Anliegen"></a>
+
+### 6. Kurz beschreiben, worum es geht
+
+Bei einem akuten Problem oder einem anderen Anliegen kann der Patient eine kurze Nachricht für das Praxisteam eingeben.
+
+<a href="fotos/IMG_4395.jpeg"><img src="fotos/IMG_4395.jpeg" width="640" alt="Schritt 6: Das Anliegen in wenigen Worten beschreiben"></a>
+
+### 7. Datenschutzerklärung unterschreiben
+
+Wenn eine neue Unterschrift benötigt wird, erscheint die Datenschutzerklärung. Der Patient liest den Text und unterschreibt mit dem Finger. Die zusätzlichen Einwilligungen für E-Mail und SMS sind unabhängig voneinander freiwillig.
+
+<a href="fotos/IMG_4396.jpeg"><img src="fotos/IMG_4396.jpeg" width="640" alt="Schritt 7: Datenschutzerklärung mit Unterschriftsfeld und optionalen Einwilligungen"></a>
+
+### 8. Über das Patientenfoto entscheiden
+
+Das Terminal fragt, ob ein Foto für die Patientenakte aufgenommen werden darf. Der Patient kann zustimmen oder ohne Foto fortfahren.
+
+<a href="fotos/IMG_4397.jpeg"><img src="fotos/IMG_4397.jpeg" width="640" alt="Schritt 8: Einwilligung in ein freiwilliges Patientenfoto"></a>
+
+### 9. Das Foto aufnehmen
+
+In der Kameravorschau richtet der Patient sein Gesicht am angezeigten Rahmen aus und drückt den Auslöser.
+
+<a href="fotos/IMG_4398.jpeg"><img src="fotos/IMG_4398.jpeg" width="640" alt="Schritt 9: Kameravorschau mit Gesichtsrahmen und Auslöser"></a>
+
+### 10. Den Bildausschnitt anpassen
+
+Das Bild lässt sich mit einem Finger verschieben und mit zwei Fingern vergrößern oder verkleinern. Anschließend bestätigt der Patient den gewünschten Ausschnitt.
+
+<a href="fotos/IMG_4399.jpeg"><img src="fotos/IMG_4399.jpeg" width="640" alt="Schritt 10: Patientenfoto verschieben, vergrößern und bestätigen"></a>
+
+### 11. Fertig – und die Karte mitnehmen
+
+Die Abschlussseite nennt den nächsten Schritt und erinnert an die Gesundheitskarte. Im gezeigten Beispiel geht es zum Empfang; je nach Termin und Zuordnung kann der Patient direkt ins Wartezimmer gehen.
+
+<a href="fotos/IMG_4400.jpeg"><img src="fotos/IMG_4400.jpeg" width="640" alt="Schritt 11: Abschlussmeldung mit dem nächsten Schritt und Erinnerung an die Gesundheitskarte"></a>
+
+### 12. Das Ergebnis in t2med
+
+Für das Praxisteam stehen die übertragenen Angaben in t2med bereit. Das Bild zeigt den Eintrag zur Telefonnummer und die gespeicherte Datenschutzerklärung einschließlich des SMS-Pins. Der Patient wird außerdem dem für seinen Ablauf konfigurierten Wartebereich zugeordnet.
+
+<a href="fotos/IMG_4403.jpeg"><img src="fotos/IMG_4403.jpeg" width="640" alt="Schritt 12: Karteikarteneinträge zu Kontaktdaten und Datenschutzerklärung mit SMS-Pin in t2med"></a>
+
 ## Einrichtung
 
 ### 1. t2med-Benutzer anlegen
@@ -95,52 +173,13 @@ Das Praxisteam meldet das Gerät mit dem eingerichteten t2med-Benutzer an. Bei a
 
 Über **„Mitarbeiter“** auf der Startseite lässt sich das Gerät abmelden. Dafür sind drei Bestätigungen erforderlich. Bis zur erneuten Anmeldung ist kein Check-in möglich.
 
-<details>
-<summary>Bilder: Mitarbeiteranmeldung und Abmeldung</summary>
+### Mitarbeiteranmeldung und Abmeldung
 
 | Anmeldung und Kamerafreigabe | Erste Abmeldebestätigung |
 |---|---|
 | [![Gerät anmelden und Kamerazugriff erlauben](fotos/IMG_4402.jpeg)](fotos/IMG_4402.jpeg) | [![Erste von drei Bestätigungen beim Abmelden](fotos/IMG_4401.jpeg)](fotos/IMG_4401.jpeg) |
 
-</details>
-
-Für Patienten führt die Anwendung durch den jeweiligen Ablauf:
-
-1. **Gesundheitskarte einstecken und „Karte einlesen“ wählen.**
-2. **Kontaktdaten prüfen**, bei Bedarf Telefonnummer oder E-Mail ergänzen bzw. korrigieren. Angaben sind freiwillig; leere Felder lassen vorhandene Daten bestehen. Eine abweichende Postanschrift wird als Hinweis für das Praxisteam dokumentiert.
-3. **Gegebenenfalls das Anliegen auswählen** und kurz beschreiben. Termin und Anliegen bestimmen die Zuordnung zum Wartebereich und den abschließenden Hinweis.
-4. **Bei Bedarf die Datenschutzerklärung lesen und unterschreiben.** Die zusätzlichen Einwilligungen für E-Mail und SMS sind freiwillig. Die unterschriebene Erklärung wird in t2med gespeichert.
-5. **Optional ein Patientenfoto aufnehmen**, den Ausschnitt anpassen und bestätigen. Ein Fortfahren ohne Foto ist möglich.
-6. **Abschlussmeldung beachten und Karte mitnehmen.** Je nach Ablauf geht es ins Wartezimmer oder zum Empfang.
-
-<details>
-<summary>Bildfolge: vollständiger Beispielablauf und Karteikarteneintrag</summary>
-
-| Start | Einlesen |
-|---|---|
-| [![Gesundheitskarte einstecken und Karte einlesen wählen](fotos/IMG_4390.jpeg)](fotos/IMG_4390.jpeg) | [![Warteanzeige während des Kartenlesens](fotos/IMG_4391.jpeg)](fotos/IMG_4391.jpeg) |
-
-| Kontaktdaten prüfen | Telefonnummer eingeben |
-|---|---|
-| [![Kontaktseite mit freiwilligen Angaben](fotos/IMG_4392.jpeg)](fotos/IMG_4392.jpeg) | [![Telefonnummer mit der Zifferntastatur eingeben](fotos/IMG_4393.jpeg)](fotos/IMG_4393.jpeg) |
-
-| Anliegen auswählen | Anliegen kurz beschreiben |
-|---|---|
-| [![Auswahl zwischen akutem Problem, Kartenlesen und anderem Anliegen](fotos/IMG_4394.jpeg)](fotos/IMG_4394.jpeg) | [![Kurze Beschreibung des Anliegens](fotos/IMG_4395.jpeg)](fotos/IMG_4395.jpeg) |
-
-| Datenschutzerklärung unterschreiben | Freiwilliges Foto |
-|---|---|
-| [![Datenschutzerklärung mit Unterschrift und optionalen Einwilligungen](fotos/IMG_4396.jpeg)](fotos/IMG_4396.jpeg) | [![Frage nach einem freiwilligen Patientenfoto](fotos/IMG_4397.jpeg)](fotos/IMG_4397.jpeg) |
-
-| Foto aufnehmen | Bildausschnitt bestätigen |
-|---|---|
-| [![Kameravorschau mit Auslöser](fotos/IMG_4398.jpeg)](fotos/IMG_4398.jpeg) | [![Foto verschieben, vergrößern und bestätigen](fotos/IMG_4399.jpeg)](fotos/IMG_4399.jpeg) |
-
-| Abschluss | Ergebnis in t2med |
-|---|---|
-| [![Abschlussmeldung mit Erinnerung an die Gesundheitskarte](fotos/IMG_4400.jpeg)](fotos/IMG_4400.jpeg) | [![Karteikarteneinträge zu Kontaktdaten und unterschriebener Datenschutzerklärung](fotos/IMG_4403.jpeg)](fotos/IMG_4403.jpeg) |
-
-</details>
+Den Patientenablauf zeigt die [Bildergeschichte vor der Einrichtung](#bildergeschichte-vom-einlesen-bis-zum-abschluss).
 
 ## Betrieb und technische Grundlage
 
